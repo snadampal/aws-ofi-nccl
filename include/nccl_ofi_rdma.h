@@ -421,12 +421,6 @@ typedef struct nccl_net_ofi_rdma_req {
 	/* Size of completed request */
 	size_t size;
 
-	/*
-	 * Protect updating critical fields such as size and ncompls when
-	 * network xfer happened over multiple rails
-	 */
-	pthread_mutex_t req_lock;
-
 	/* State of request */
 	nccl_net_ofi_rdma_req_state_t state;
 
@@ -531,7 +525,6 @@ typedef struct nccl_net_ofi_rdma_send_comm {
 	nvtxDomainHandle_t nvtx_domain[NCCL_OFI_N_NVTX_DOMAIN_PER_COMM];
 #endif
 
-	pthread_mutex_t ctrl_recv_lock;
 	bool received_close_message;
 	/* Counters for total sent and received control messages */
 	uint64_t n_ctrl_received;
@@ -615,7 +608,6 @@ typedef struct nccl_net_ofi_rdma_recv_comm {
 	nccl_net_ofi_rdma_req_t *send_close_req;
 
 	/* Counters for total sent and received control messages */
-	pthread_mutex_t ctrl_counter_lock;
 	uint64_t n_ctrl_sent;
 	uint64_t n_ctrl_delivered;
 
@@ -900,8 +892,6 @@ struct nccl_net_ofi_ep_rail {
 	size_t min_rx_buff_posted;
 	/* Maximum posted rx buffers (see RDMA_MAX_POSTED_BOUNCE_BUFFERS) */
 	size_t max_rx_buff_posted;
-	/* Mutex for rx buffer operations */
-	pthread_mutex_t rx_buff_mutex;
 
 	/* Allocate a receive buffer request for this rail (eager or ctrl) */
 	nccl_net_ofi_rdma_req_t* (*rx_buff_req_alloc)(nccl_net_ofi_rdma_ep_t *ep,
@@ -1121,8 +1111,6 @@ public:
 
 	/* Pending requests queue */
 	std::deque<nccl_net_ofi_rdma_req_t *> pending_reqs_queue;
-	/* Lock for `pending_reqs_queue` */
-	pthread_mutex_t pending_reqs_lock;
 
 	/* Free list of ctrl rx buffers */
 	nccl_ofi_freelist_t *ctrl_rx_buff_fl = nullptr;

@@ -103,7 +103,6 @@
 /* List of comms undergoing deferred cleanup */
 static std::deque<nccl_net_ofi_rdma_send_comm_t*> *s_comm_cleanup_list = NULL;
 static std::deque<nccl_net_ofi_rdma_recv_comm_t*> *r_comm_cleanup_list = NULL;
-static pthread_mutex_t comm_cleanup_list_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Number of open (not finalizing) send and recv comms */
 static int num_open_comms = 0;
 
@@ -559,7 +558,6 @@ static inline int inc_req_completion(nccl_net_ofi_rdma_req_t *req,
 {
 	int ret = 0;
 	int ncompls;
-	nccl_net_ofi_mutex_lock(&req->req_lock);
 
 	req->size += size;
 	ncompls = ++(req->ncompls);
@@ -573,8 +571,6 @@ static inline int inc_req_completion(nccl_net_ofi_rdma_req_t *req,
 		/* Trace this completion */
 		NCCL_OFI_TRACE_COMPLETIONS(req->dev_id, req->type, req, req);
 	}
-
-	nccl_net_ofi_mutex_unlock(&req->req_lock);
 
 	return -ret;
 }
@@ -604,13 +600,9 @@ static inline int set_eager_copy_completed(nccl_net_ofi_rdma_req_t *req)
 	nccl_net_ofi_rdma_req_t *recv_req = eager_copy_data->recv_req;
 	rdma_req_recv_data_t *recv_data = get_recv_data(recv_req);
 
-	nccl_net_ofi_mutex_lock(&req->req_lock);
-
 	/* Set send ctrl request completed */
 	req->ncompls = 1;
 	req->state = NCCL_OFI_RDMA_REQ_COMPLETED;
-
-	nccl_net_ofi_mutex_unlock(&req->req_lock);
 
 	/* Get size of received data */
 	rdma_req_rx_buff_data_t *rx_buff_data = get_rx_buff_data(eager_copy_data->eager_rx_buff_req);
@@ -655,17 +647,11 @@ static inline int set_send_ctrl_completed(nccl_net_ofi_rdma_req_t *req)
 	nccl_net_ofi_rdma_recv_comm_t *r_comm =
 		(nccl_net_ofi_rdma_recv_comm_t *)req->comm;
 
-	nccl_net_ofi_mutex_lock(&req->req_lock);
-
 	/* Set send ctrl request completed */
 	req->ncompls = 1;
 	req->state = NCCL_OFI_RDMA_REQ_COMPLETED;
 
-	nccl_net_ofi_mutex_unlock(&req->req_lock);
-
-	nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
 	r_comm->n_ctrl_delivered += 1;
-	nccl_net_ofi_mutex_unlock(&r_comm->ctrl_counter_lock);
 
 	/* Add completion to parent request */
 	return inc_req_completion(recv_req, 0, recv_data->total_num_compls);
@@ -698,7 +684,6 @@ static inline int inc_recv_seg_completion(nccl_net_ofi_rdma_req_t *req,
 	int ret = 0;
 	bool segms_received;
 	
-	nccl_net_ofi_mutex_lock(&req->req_lock);
 
 	/* Sum up segment sizes */
 	req->size += size;
@@ -718,16 +703,8 @@ static inline int inc_recv_seg_completion(nccl_net_ofi_rdma_req_t *req,
 		/* Total number of completions have arrived */
 		req->state = NCCL_OFI_RDMA_REQ_COMPLETED;
 
-		/* Release lock of receive segment request before
-		 * receive request is set to completed to avoid
-		 * unlocking receive segment request after it has been
-		 * freed in `test()` */
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
-		
 		/* Add completion to parent request */
 		ret = inc_req_completion(recv_req, req->size, recv_data->total_num_compls);
-	} else {
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
 	}
 
 	return ret;
@@ -760,14 +737,12 @@ static inline int update_send_data_from_remote(nccl_net_ofi_rdma_send_comm_t *s_
 	send_data->remote_len = ctrl_msg->buff_len;
 
 	/* If recv buffer is smaller than send buffer, we reduce the size of the send req */
-	nccl_net_ofi_mutex_lock(&req->req_lock);
 	if (send_data->remote_len < send_data->buff_len) {
 		NCCL_OFI_TRACE(NCCL_NET, "Remote recv buffer (%zu) smaller than send buffer (%zu)",
 			       send_data->remote_len, send_data->buff_len);
 		req->size = send_data->remote_len;
 		send_data->buff_len = send_data->remote_len;
 	}
-	nccl_net_ofi_mutex_unlock(&req->req_lock);
 
 	send_data->schedule = scheduler->get_schedule(scheduler, send_data->buff_len, device->num_rails);
 	if (OFI_UNLIKELY(send_data->schedule == NULL)) {
@@ -805,9 +780,7 @@ int nccl_net_ofi_rdma_ep_t::repost_rx_buff(nccl_net_ofi_rdma_req_t *rx_buff_req)
 	ret = send_progress(rx_buff_req);
 	if (ret == -FI_EAGAIN) {
 		/* Add to pending reqs queue */
-		nccl_net_ofi_mutex_lock(&this->pending_reqs_lock);
 		this->pending_reqs_queue.push_back(rx_buff_req);
-		nccl_net_ofi_mutex_unlock(&this->pending_reqs_lock);
 		NCCL_OFI_TRACE_PENDING_INSERT(rx_buff_req);
 
 		return 0;
@@ -824,12 +797,9 @@ int nccl_net_ofi_rdma_ep_t::repost_rx_buff(nccl_net_ofi_rdma_req_t *rx_buff_req)
 
 int nccl_net_ofi_rdma_ep_t::decrease_rx_buff_cnt(nccl_net_ofi_ep_rail_t *rail)
 {
-	nccl_net_ofi_mutex_lock(&rail->rx_buff_mutex);
-
 	assert(rail->num_rx_buff_posted > 0);
 	rail->num_rx_buff_posted--;
 
-	nccl_net_ofi_mutex_unlock(&rail->rx_buff_mutex);
 
 	return this->check_post_rx_buffers_rail(rail);
 }
@@ -888,9 +858,7 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		ret = send_progress(req);
 		if (ret == -FI_EAGAIN) {
 			/* Add to pending reqs queue */
-			nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
 			ep->pending_reqs_queue.push_back(req);
-			nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 			ret = 0;
 			NCCL_OFI_TRACE_PENDING_INSERT(req);
 		}
@@ -901,7 +869,6 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 		/* If recv buffer is smaller than send buffer, we reduce the size of the send req, even if we have
 		   have already eagerly sent the whole send buffer. The receive side will discard the extra data. */
 		send_data->remote_len = ctrl_msg->buff_len;
-		nccl_net_ofi_mutex_lock(&req->req_lock);
 		if (send_data->remote_len < send_data->buff_len) {
 			NCCL_OFI_TRACE(NCCL_NET,
 				       "Remote recv buffer (%zu) smaller than send buffer (%zu) in eager send",
@@ -909,7 +876,6 @@ static inline int handle_ctrl_recv(nccl_net_ofi_rdma_send_comm_t *s_comm,
 			req->size = send_data->remote_len;
 			send_data->buff_len = send_data->remote_len;
 		}
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
 
 		/* In the eager case, increment completion count for send req */
 		ret = inc_req_completion(req, 0, send_data->total_num_compls);
@@ -1061,13 +1027,10 @@ static int handle_close_msg_recv(nccl_net_ofi_rdma_req_t *rx_buff_req)
 		return -EINVAL;
 	}
 
-	nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
 
 	assert(s_comm->received_close_message == false);
 	s_comm->received_close_message = true;
 	s_comm->n_ctrl_expected = close_msg->ctrl_counter;
-
-	nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
 
 	return ep->repost_rx_buff(rx_buff_req);
 }
@@ -1142,9 +1105,7 @@ static inline int handle_rx_buff_recv(nccl_net_ofi_rdma_device_t *device, uint16
 			goto exit;
 		}
 
-		nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
 		s_comm->n_ctrl_received += 1;
-		nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
 
 		break;
 	case NCCL_OFI_RDMA_MSG_CLOSE:
@@ -1700,9 +1661,7 @@ static int receive_progress(nccl_net_ofi_rdma_req_t *req, bool add_to_pending)
 		/* Extract ep */
 		nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)r_comm->base.base.ep;
 		/* Place in pending requests queue for next try */
-		nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
 		ep->pending_reqs_queue.push_back(req);
-		nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 		rc = 0;
 
 		NCCL_OFI_TRACE_PENDING_INSERT(req);
@@ -1718,12 +1677,10 @@ int nccl_net_ofi_rdma_ep_t::process_pending_reqs()
 
 	while (true) {
 		nccl_net_ofi_rdma_req_t *req = NULL;
-		nccl_net_ofi_mutex_lock(&this->pending_reqs_lock);
 		if (!this->pending_reqs_queue.empty()) {
 			req = this->pending_reqs_queue.front();
 			this->pending_reqs_queue.pop_front();
 		}
-		nccl_net_ofi_mutex_unlock(&this->pending_reqs_lock);
 		if (req == NULL) { break; }
 
 		switch (req->type) {
@@ -1753,9 +1710,7 @@ int nccl_net_ofi_rdma_ep_t::process_pending_reqs()
 			break;
 		} else if (rc == -FI_EAGAIN) {
 			/* Put the request in the front of the queue and try again later */
-			nccl_net_ofi_mutex_lock(&this->pending_reqs_lock);
 			this->pending_reqs_queue.push_front(req);
-			nccl_net_ofi_mutex_unlock(&this->pending_reqs_lock);
 			rc = 0;
 			break;
 		}
@@ -2246,17 +2201,13 @@ int nccl_net_ofi_rdma_ep_t::handle_rx_eagain(nccl_net_ofi_ep_rail_t *rail,
 					     size_t num_buffs_failed)
 {
 	/* Add to pending reqs queue */
-	nccl_net_ofi_mutex_lock(&this->pending_reqs_lock);
 	this->pending_reqs_queue.push_back(req);
-	nccl_net_ofi_mutex_unlock(&this->pending_reqs_lock);
 	NCCL_OFI_TRACE_PENDING_INSERT(req);
 
-	nccl_net_ofi_mutex_lock(&rail->rx_buff_mutex);
 
 	assert(rail->num_rx_buff_posted >= num_buffs_failed);
 	rail->num_rx_buff_posted -= num_buffs_failed;
 
-	nccl_net_ofi_mutex_unlock(&rail->rx_buff_mutex);
 
 	return 0;
 }
@@ -2266,13 +2217,10 @@ int nccl_net_ofi_rdma_ep_t::post_rx_buffs_on_rail(nccl_net_ofi_ep_rail_t *rail)
 {
 	int ret = 0;
 
-	nccl_net_ofi_mutex_lock(&rail->rx_buff_mutex);
-
 	size_t buffers_needed = rail->max_rx_buff_posted -
 				rail->num_rx_buff_posted;
 	rail->num_rx_buff_posted = rail->max_rx_buff_posted;
 
-	nccl_net_ofi_mutex_unlock(&rail->rx_buff_mutex);
 
 	/* Post all the rx buffers we need */
 	for (size_t i = 0; i < buffers_needed; ++i) {
@@ -2573,11 +2521,8 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	if (OFI_LIKELY(req->state == NCCL_OFI_RDMA_REQ_COMPLETED)) {
 
 		size_t req_size;
-		nccl_net_ofi_mutex_lock(&req->req_lock);
 
 		req_size = req->size;
-
-		nccl_net_ofi_mutex_unlock(&req->req_lock);
 
 		if (size)
 			*size = req_size;
@@ -3215,17 +3160,13 @@ static inline int insert_rdma_recv_req_into_msgbuff(nccl_net_ofi_rdma_recv_comm_
 int nccl_net_ofi_rdma_ep_t::process_cq_if_pending()
 {
 	/* Process the CQ if there are any pending requests */
-	nccl_net_ofi_mutex_lock(&this->pending_reqs_lock);
 	bool is_deque_empty = this->pending_reqs_queue.empty();
-	nccl_net_ofi_mutex_unlock(&this->pending_reqs_lock);
 	if (!is_deque_empty) {
 		int ret = this->ofi_process_cq();
 		if (ret != 0) {
 			return ret;
 		}
-		nccl_net_ofi_mutex_lock(&this->pending_reqs_lock);
 		is_deque_empty = this->pending_reqs_queue.empty();
-		nccl_net_ofi_mutex_unlock(&this->pending_reqs_lock);
 		if (!is_deque_empty) {
 			/* Network is still busy. */
 			return -EAGAIN;
@@ -3390,9 +3331,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	NCCL_OFI_TRACE_RECV(dev_id, r_comm, sizes[0], req, base_req);
 
 	/* Send ctrl msg */
-	nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
 	r_comm->n_ctrl_sent += 1;
-	nccl_net_ofi_mutex_unlock(&r_comm->ctrl_counter_lock);
 	ret = receive_progress(recv_data->send_ctrl_req, true);
 	if (OFI_UNLIKELY(ret != 0)) {
 		/* TODO: Remove req from message buffer */
@@ -3656,11 +3595,6 @@ static int recv_comm_destroy(nccl_net_ofi_rdma_recv_comm_t *r_comm)
 	/* Release communicator ID */
 	device->comm_idpool.free_id(r_comm->local_comm_id);
 
-	ret = nccl_net_ofi_mutex_destroy(&r_comm->ctrl_counter_lock);
-	if (ret != 0) {
-		return ret;
-	}
-
 	free_rdma_recv_comm(r_comm);
 
 	ret = ep->release_ep(false, false);
@@ -3751,11 +3685,9 @@ static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_co
 
 	if (r_comm->send_close_req == NULL) {
 		/* Waiting for all ctrls to complete */
-		nccl_net_ofi_mutex_lock(&r_comm->ctrl_counter_lock);
 		uint64_t n_ctrl_sent = r_comm->n_ctrl_sent;
 		bool all_ctrl_msgs_delivered =
 			(r_comm->n_ctrl_delivered == n_ctrl_sent);
-		nccl_net_ofi_mutex_unlock(&r_comm->ctrl_counter_lock);
 
 		if (all_ctrl_msgs_delivered) {
 			/* Send close message, only if we sent any control
@@ -3781,9 +3713,7 @@ static inline int progress_closing_recv_comm(nccl_net_ofi_rdma_recv_comm_t *r_co
 	} else /* (r_comm->send_close_req != NULL) */ {
 
 		/* Waiting for close message delivery */
-		nccl_net_ofi_mutex_lock(&r_comm->send_close_req->req_lock);
 		nccl_net_ofi_rdma_req_state_t state = r_comm->send_close_req->state;
-		nccl_net_ofi_mutex_unlock(&r_comm->send_close_req->req_lock);
 
 		if (state == NCCL_OFI_RDMA_REQ_ERROR) {
 			NCCL_OFI_WARN("Send close message complete with error");
@@ -3885,11 +3815,6 @@ static int send_comm_destroy(nccl_net_ofi_rdma_send_comm_t *s_comm)
 	}
 #endif
 
-	ret = nccl_net_ofi_mutex_destroy(&s_comm->ctrl_recv_lock);
-	if (ret != 0) {
-		return ret;
-	}
-
 	free_rdma_send_comm(s_comm);
 
 	ret = ep->release_ep(false, false);
@@ -3935,8 +3860,6 @@ static inline int progress_closing_send_comm(nccl_net_ofi_rdma_send_comm_t *s_co
 		return ret;
 	}
 
-	nccl_net_ofi_mutex_lock(&s_comm->ctrl_recv_lock);
-
 	/**
 	 * We claim the send communicator is safe to destroy if one of
 	 * the following is true:
@@ -3952,8 +3875,6 @@ static inline int progress_closing_send_comm(nccl_net_ofi_rdma_send_comm_t *s_co
 	bool ready_to_destroy = ((s_comm->received_close_message) ?
 				 (s_comm->n_ctrl_received == s_comm->n_ctrl_expected) :
 				 (s_comm->n_ctrl_received == 0));
-
-	nccl_net_ofi_mutex_unlock(&s_comm->ctrl_recv_lock);
 
 	return ready_to_destroy ? COMM_READY_TO_DESTROY : 0;
 }
@@ -4074,8 +3995,6 @@ static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 
 	r_comm->comm_active = false;
 
-	nccl_net_ofi_mutex_lock(&comm_cleanup_list_lock);
-
 	/* Defer cleanup until we deliver all outstanding control messages
 	   and deliver the close message */
 	r_comm_cleanup_list->push_back(r_comm);
@@ -4083,8 +4002,6 @@ static int recv_close_deferred(nccl_net_ofi_recv_comm_t *recv_comm)
 	assert(num_open_comms > 0);
 	num_open_comms--;
 	ret = comm_close_handler();
-
-	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
 	return ret;
 }
@@ -4221,9 +4138,7 @@ static int flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		}
 	} else {
 		/* Add to pending reqs queue */
-		nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
 		ep->pending_reqs_queue.push_back(req);
-		nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 		ret = 0;
 		NCCL_OFI_TRACE_PENDING_INSERT(req);
 	}
@@ -4419,25 +4334,15 @@ static int rdma_fl_req_entry_init(void *entry)
 	zero_nccl_ofi_req(req);
 	req->base.test = test;
 
-	/* Initialize mutex for request access */
-	int ret = nccl_net_ofi_mutex_init(&req->req_lock, NULL);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Unable to initialize mutex");
-		return ret;
-	}
-
 	rdma_req_init_ctx(req);
 
-	return ret;
+	return 0;
 }
 
 
 static void rdma_fl_req_entry_fini(void *entry)
 {
-	nccl_net_ofi_rdma_req_t *req = static_cast<nccl_net_ofi_rdma_req_t *>(entry);
-	assert(req);
 
-	nccl_net_ofi_mutex_destroy(&req->req_lock);
 }
 
 
@@ -4486,12 +4391,6 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 		NCCL_OFI_WARN("Unable to allocate receive comm object for device %d",
 			      dev_id);
 		goto error;
-	}
-
-	ret = nccl_net_ofi_mutex_init(&r_comm->ctrl_counter_lock, NULL);
-	if (ret != 0) {
-		free_rdma_recv_comm(r_comm);
-		return NULL;
 	}
 
 	r_comm->base.base.type = NCCL_NET_OFI_RECV_COMM;
@@ -4713,7 +4612,6 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 		if (COMM_ID_INVALID != r_comm->local_comm_id) {
 			device->comm_idpool.free_id(r_comm->local_comm_id);
 		}
-		nccl_net_ofi_mutex_destroy(&r_comm->ctrl_counter_lock);
 		free_rdma_recv_comm(r_comm);
 	}
 
@@ -4988,9 +4886,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 		ret = -EINVAL;
 	}
 
-	nccl_net_ofi_mutex_lock(&comm_cleanup_list_lock);
 	++num_open_comms;
-	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
 	/* Reset l_comm stage for the next accept() */
 	l_comm->stage = { };
@@ -5658,24 +5554,18 @@ static inline int check_post_rx_buff_req(nccl_net_ofi_rdma_req_t *rx_buff_req)
 
 	nccl_net_ofi_ep_rail_t *rail = rx_buff_data->rail;
 
-	nccl_net_ofi_mutex_lock(&rail->rx_buff_mutex);
-
 	bool need_post = false;
 	if (rail->num_rx_buff_posted < rail->max_rx_buff_posted) {
 		++(rail->num_rx_buff_posted);
 		need_post = true;
 	}
 
-	nccl_net_ofi_mutex_unlock(&rail->rx_buff_mutex);
-
 	if (need_post) {
 		/* Attempt to re-post rx buffer */
 		ret = send_progress(rx_buff_req);
 		if (ret == -FI_EAGAIN) {
 			/* Place in pending requests queue for next try */
-			nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
 			ep->pending_reqs_queue.push_back(rx_buff_req);
-			nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 			NCCL_OFI_TRACE_PENDING_INSERT(rx_buff_req);
 
 			return 0;
@@ -5891,9 +5781,7 @@ retry:
 		ret = send_progress(req);
 		if (ret == -FI_EAGAIN) {
 			/* Add to pending reqs queue */
-			nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
 			ep->pending_reqs_queue.push_back(req);
-			nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 			ret = 0;
 			NCCL_OFI_TRACE_PENDING_INSERT(req);
 		} else if (OFI_UNLIKELY(ret != 0)) {
@@ -5951,15 +5839,12 @@ static int send_close_deferred(nccl_net_ofi_send_comm_t *send_comm)
 
 	s_comm->comm_active = false;
 
-	nccl_net_ofi_mutex_lock(&comm_cleanup_list_lock);
-
 	/* Deferred cleanup */
 	s_comm_cleanup_list->push_back(s_comm);
 
 	assert(num_open_comms > 0);
 	num_open_comms--;
 	ret = comm_close_handler();
-	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
 	return ret;
 }
@@ -6094,7 +5979,6 @@ int nccl_net_ofi_rdma_ep_t::init_rx_buffers()
 			ofi_nccl_rdma_max_posted_control_buffers(), this->num_control_rails
 		);
 		rail->num_rx_buff_posted = 0;
-		nccl_net_ofi_mutex_init(&rail->rx_buff_mutex, NULL);
 		rail->rx_buff_req_alloc = ctrl_rx_buff_req_alloc;
 	}
 
@@ -6112,7 +5996,6 @@ int nccl_net_ofi_rdma_ep_t::init_rx_buffers()
 			rail->max_rx_buff_posted = 0;
 		}
 		rail->num_rx_buff_posted = 0;
-		nccl_net_ofi_mutex_init(&rail->rx_buff_mutex, NULL);
 		rail->rx_buff_req_alloc = eager_rx_buff_req_alloc;
 	}
 
@@ -6123,7 +6006,6 @@ int nccl_net_ofi_rdma_ep_t::init_rx_buffers()
 int nccl_net_ofi_rdma_ep_t::fini_rx_buffers()
 {
 	int ret = 0;
-	nccl_net_ofi_ep_rail_t *rail;
 
 	ret = nccl_ofi_freelist_fini(this->ctrl_rx_buff_fl);
 	if (ret != 0) {
@@ -6143,16 +6025,6 @@ int nccl_net_ofi_rdma_ep_t::fini_rx_buffers()
 	if (ret != 0) {
 		NCCL_OFI_WARN("Failed to fini rx_buff_reqs_fl");
 		return ret;
-	}
-
-	for (uint16_t rail_id = 0; rail_id < this->num_rails; ++rail_id) {
-		rail = this->rdma_endpoint_get_rail(rail_id);
-		nccl_net_ofi_mutex_destroy(&rail->rx_buff_mutex);
-	}
-
-	for (uint16_t rail_id = 0; rail_id < this->num_control_rails; ++rail_id) {
-		rail = this->rdma_endpoint_get_control_rail(rail_id);
-		nccl_net_ofi_mutex_destroy(&rail->rx_buff_mutex);
 	}
 
 	return ret;
@@ -6226,9 +6098,7 @@ static int rma_write_impl(nccl_net_ofi_send_comm_t *send_comm, void* src, size_t
 	ret = send_progress(req);
 	if (ret == -FI_EAGAIN) {
 		/* Add to pending reqs queue */
-		nccl_net_ofi_mutex_lock(&ep->pending_reqs_lock);
 		ep->pending_reqs_queue.push_back(req);
-		nccl_net_ofi_mutex_unlock(&ep->pending_reqs_lock);
 		ret = 0;
 		NCCL_OFI_TRACE_PENDING_INSERT(req);
 	} else if (OFI_UNLIKELY(ret != 0)) {
@@ -6300,12 +6170,6 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 	if (OFI_UNLIKELY(ret_s_comm == NULL)) {
 		NCCL_OFI_WARN("Couldn't allocate send comm object for dev %d", dev_id);
 		return -ENOMEM;
-	}
-
-	ret = nccl_net_ofi_mutex_init(&ret_s_comm->ctrl_recv_lock, NULL);
-	if (ret != 0) {
-		free_rdma_send_comm(ret_s_comm);
-		return ret;
 	}
 
 	ret_s_comm->base.base.type = NCCL_NET_OFI_SEND_COMM;
@@ -6387,7 +6251,6 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 		if (COMM_ID_INVALID != ret_s_comm->local_comm_id) {
 			device->comm_idpool.free_id(ret_s_comm->local_comm_id);
 		}
-		nccl_net_ofi_mutex_destroy(&ret_s_comm->ctrl_recv_lock);
 		this->decrement_ref_cnt();
 		free_rdma_send_comm(ret_s_comm);
 	}
@@ -6473,9 +6336,7 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 	delete s_comm->connector;
 	s_comm->connector = nullptr;
 
-	nccl_net_ofi_mutex_lock(&comm_cleanup_list_lock);
 	++num_open_comms;
-	nccl_net_ofi_mutex_unlock(&comm_cleanup_list_lock);
 
 	comm_state->stage = COMM_CONNECTED;
 
@@ -6665,12 +6526,6 @@ int nccl_net_ofi_rdma_ep_t::cleanup_resources() {
 		ret = -EINVAL;
 	}
 
-	err_code = nccl_net_ofi_mutex_destroy(&this->pending_reqs_lock);
-	if (err_code != 0) {
-		NCCL_OFI_WARN("rdma endpoint destructor: destroying pending_reqs_lock mutex failed, rc %d", err_code);
-		ret = -EINVAL;
-	}
-
 	assert(ret == 0);
 
 	return ret;
@@ -6696,7 +6551,7 @@ int nccl_net_ofi_rdma_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 		}
 
 		if (!skip_lock) {
-			nccl_net_ofi_mutex_lock(&domain_ptr->domain_lock);
+	//		nccl_net_ofi_mutex_lock(&domain_ptr->domain_lock);
 		}
 
 		this->decrement_ref_cnt();
@@ -6720,7 +6575,7 @@ int nccl_net_ofi_rdma_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 
  unlock:
 		if (!skip_lock) {
-			nccl_net_ofi_mutex_unlock(&domain_ptr->domain_lock);
+	//		nccl_net_ofi_mutex_unlock(&domain_ptr->domain_lock);
 		}
 		if (!force_cleanup && ret == 0 && local_ref_cnt == 0) {
 			/* Release the domain as well */
@@ -6823,12 +6678,6 @@ nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domai
 	this->rails = std::vector<nccl_net_ofi_ep_rail_t>(num_rails, nccl_net_ofi_ep_rail_t{});
 
 	this->control_rails = std::vector<nccl_net_ofi_ep_rail_t>(num_control_rails, nccl_net_ofi_ep_rail_t{});
-
-	ret = nccl_net_ofi_mutex_init(&this->pending_reqs_lock, NULL);
-	if (ret != 0) {
-		NCCL_OFI_WARN("Mutex initialization failed: %s", strerror(ret));
-		throw std::runtime_error("rdma endpoint constructor: mutex initialization failed");
-	}
 
 	this->ctrl_rx_buff_size = std::max({sizeof(nccl_net_ofi_rdma_ctrl_msg_t),
 					    sizeof(nccl_ofi_rdma_connection_info_t),
@@ -7244,13 +7093,13 @@ static void get_hints(struct fi_info *hints)
 	hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_HMEM | FI_MR_VIRT_ADDR |
 		FI_MR_ALLOCATED | FI_MR_PROV_KEY;
 	hints->domain_attr->mr_key_size = (size_t) ofi_nccl_mr_key_size();
-	hints->domain_attr->threading = FI_THREAD_SAFE;
+	hints->domain_attr->threading = FI_THREAD_DOMAIN;
 
 	/* We hard poll for completion, but if a provider is faster with async
 	 * progress, then we don't really care and should let it do that. At
 	 * least one provider has an issue with progress manual and internal
 	 * acks during shutdown, so allow users to override requested model. */
-	hints->domain_attr->control_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
+	hints->domain_attr->control_progress = FI_PROGRESS_CONTROL_UNIFIED; //nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
 	hints->domain_attr->data_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
 }
 
