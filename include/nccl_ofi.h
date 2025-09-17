@@ -79,8 +79,8 @@
  *
  * Caller is assumed to hold the domain lock
  */
-#define CHECK_DOMAIN_ACTIVE(domain, fn_name) \
-	if (OFI_UNLIKELY(!domain->domain_active)) { \
+#define CHECK_DOMAIN_ACTIVE(res_domain, fn_name) \
+	if (OFI_UNLIKELY(!res_domain->res_domain_active)) { \
 		NCCL_OFI_WARN("Called " fn_name " on request with inactive domain"); \
 		return -EINVAL; \
 	} \
@@ -121,6 +121,7 @@ extern size_t system_page_size;
 
 class nccl_net_ofi_device_t;
 class nccl_net_ofi_domain_t;
+class nccl_net_ofi_resource_domain_t;
 class nccl_net_ofi_ep_t;
 class nccl_net_ofi_plugin_t;
 
@@ -323,14 +324,14 @@ public:
 		--unreleased_inactive_domain_counter;
 	}
 
-	/* Retrieve a domain associated with this device.  There may
+	/* Retrieve the default domain associated with this device.  There may
 	 * be more than one domain per device, depending on a number
 	 * of performance tradeoffs (be sure to read the domain
 	 * description below).
 	 */
-	nccl_net_ofi_domain_t *get_domain();
+	nccl_net_ofi_domain_t *get_domain(int dom_id = 0);
 
-	nccl_net_ofi_ep_t *get_ep();
+	nccl_net_ofi_ep_t *get_ep(int dom_id = 0);
 
 	/**
 	 * implementation of retreiving a domain from a device.  This code
@@ -399,7 +400,10 @@ protected:
 	 * implementation of get_domain() and should not be called
 	 * from the more general case.
 	 */
-	virtual nccl_net_ofi_domain_t *create_domain() = 0;
+	virtual nccl_net_ofi_domain_t *create_domain(int dom_id=0) = 0;
+
+	//SN
+	//Do I need to add free_domain (int domain_id)??
 
 	/**
 	 * release all domains and endpoints. This function is a private
@@ -460,19 +464,21 @@ public:
 	 */
 	virtual struct fid_domain *get_ofi_domain_for_cm() = 0;
 
-	/**
-	 * Retrieve an fid_cq object associated with this domain to be used for 
-	 * connection management. There may be more than one fid_cq per domain, depending
-	 * on the transport; in that case, this will be the cq object associated with the
-	 * "leader NIC".
-	 */
-	virtual struct fid_cq *get_ofi_cq_for_cm() = 0;
-
 	/* Create a new endpoint
 	 *
 	 * Pure virtual function to allocate a new endpoint structure
 	 */
 	virtual nccl_net_ofi_ep_t *create_endpoint() = 0;
+
+
+        /*
+         * create a new domain.  This funcion is a private pure
+         * virtual function, which is called from the base
+         * implementation of get_domain() and should not be called
+         * from the more general case.
+         */
+        virtual nccl_net_ofi_resource_domain_t *create_resource_domain() = 0;
+
 
 	/**
 	 * @brief	Returns the base domain's device back-pointer.
@@ -490,17 +496,27 @@ public:
 	 * 		nullptr, and does not increment the endpoint ref_cnt if the pointer
 	 * 		has an endpoint.
 	 */
-	inline nccl_net_ofi_ep_t *get_endpoint_ptr()
+	inline nccl_net_ofi_ep_t *get_base_endpoint_ptr()
 	{
-		return endpoint;
+		return base_endpoint;
 	}
+
+        /**
+         * @brief       Directly returns the base resource domain  pointer
+         * 
+         */
+        inline nccl_net_ofi_resource_domain_t *get_base_resource_domain_ptr()
+        {
+                return base_res_domain;
+        }
+
 
 	/**
 	 * @brief	Set the endpoint pointer to nullptr.
 	 */
-	inline void clear_endpoint()
+	inline void clear_base_endpoint()
 	{
-		endpoint = nullptr;
+		base_endpoint = nullptr;
 	}
 
 	/**
@@ -524,6 +540,24 @@ public:
 	 */
 	nccl_net_ofi_ep_t *get_ep();
 
+
+	        /* Retrieve the default domain associated with this device.  There may
+         * be more than one domain per device, depending on a number
+         * of performance tradeoffs (be sure to read the domain
+         * description below).
+         */
+        nccl_net_ofi_resource_domain_t *get_resource_domain();
+
+        /**
+         * implementation of retreiving a domain from a device.  This code
+         * assumes the device lock is already held, because in the case of
+         * get_domain() we only need to worry about the device lock, but in
+         * the device->get_ep call, hold the lock while we're also creating
+         * the ep.
+         */
+        nccl_net_ofi_resource_domain_t *nccl_net_ofi_domain_get_resource_domain_impl();
+
+
 	/**
 	 * @brief 	Release resources associated with the domain
 	 * 
@@ -536,6 +570,12 @@ public:
 	 */
 	int release_domain(bool skip_device_lock, bool force_cleanup);
 
+
+	        /**
+         * @brief       Erase all domain_table elements matching the provided domain
+         */
+        void remove_resource_domain_from_map(nccl_net_ofi_resource_domain_t *res_domain);
+
 	/*
 	 * Protocol-agnostic MR cache for this device.
 	 */
@@ -544,7 +584,7 @@ public:
 	/* Memory registration key pool */
 	nccl_ofi_idpool_t *mr_rkey_pool = nullptr;
 
-	pthread_mutex_t domain_lock;
+	pthread_mutex_t domain_lock; //SN: Is it really required??
 
 	/*
 	 * Boolean flag indicating whether the domain is still valid and usable
@@ -556,7 +596,7 @@ public:
 	 *
 	 * This flag is protected by domain_lock
 	 */
-	bool domain_active;
+	bool domain_active; //SN: revisit
 
 	/**
 	 * Invalidate domain. Marks the domain as inactive and removes it from the
@@ -564,7 +604,23 @@ public:
 	 *
 	 * Caller is assumed to hold domain_lock
 	 */
-	virtual void invalidate();
+	virtual void invalidate(); //SN: revisit
+				   //
+	        /**
+         * @brief       Increment base device's unreleased_inactive_domain_counter
+         */
+        inline void inc_unreleased_inactive_resource_domain_counter()
+        {
+                ++unreleased_inactive_resource_domain_counter;
+        }
+
+        /**
+         * @brief       Decrement base device's unreleased_inactive_domain_counter
+         */
+        inline void dec_unreleased_inactive_resource_domain_counter()
+        {
+                --unreleased_inactive_resource_domain_counter;
+        }
 
 protected:
 	/**
@@ -593,7 +649,19 @@ protected:
 	   communication.  The rdma protocol uses this for all tx
 	   requests and all connection-establishment requests, but may
 	   have additional endpoints for the rx side of rdma writes. */
-	nccl_net_ofi_ep_t *endpoint = nullptr;
+	nccl_net_ofi_ep_t *base_endpoint = nullptr;
+
+        /* CQ used for (at a minimum) servicing the endpoint used for receiving connection
+           messages.  Send/Recv protocol uses this for all
+           communication.  The rdma protocol uses this for all tx
+           requests and all connection-establishment requests, but may
+           have additional endpoints for the rx side of rdma writes. */
+        nccl_net_ofi_resource_domain_t *base_res_domain = nullptr;
+
+	        /**
+         * hash table indexed by thread id.
+         */
+        std::unordered_map<long, nccl_net_ofi_resource_domain_t *> res_domain_table;
 
 	/* Domain reference counter for resource management.
 	 *
@@ -602,6 +670,16 @@ protected:
 	 * of endpoints created on this domain. When it reaches 0, the
 	 * domain can be destroyed. */
 	size_t ref_cnt;
+
+        /**
+         * Number of domains that have been deactivated but not freed
+         *
+         * This counter is used for a diagnostic when the device is finalized,
+         * to track inactive domains (which aren't in the domain table) which
+         * were never closed
+         */
+        size_t unreleased_inactive_resource_domain_counter = 0;
+
 
 	/** 
 	 * Track whether the cleanup_resources function was already called to avoid calling
@@ -612,6 +690,127 @@ protected:
 	bool called_cleanup_resources = false;
 };
 
+/**
+ * Resource Domain Object - Represents a protection and thread safe resource domain
+ *
+ * Libfabric Resource Domain like an AV and CQ as well as a general thread boundary.
+ * Transports are free to implement fine grained threads, but
+ * generally it is expected that calls into resources that share the
+ * same domain will share the same lock.
+ */
+class nccl_net_ofi_resource_domain_t {
+public:
+        /**
+         * @brief       Default constructor.
+         * 
+         * Initialize resources associated with the domain base class.
+         * Expectation is that this will be called by a transport's domain
+         * constructor 
+         */
+        nccl_net_ofi_resource_domain_t(nccl_net_ofi_domain_t *domain_arg);
+
+        /**
+         * Retrieve an fid_cq object associated with this domain to be used for 
+         * connection management. There may be more than one fid_cq per domain, depending
+         * on the transport; in that case, this will be the cq object associated with the
+         * "leader NIC".
+         */
+        virtual struct fid_cq *get_ofi_cq_for_cm() = 0;
+
+        /**
+         * @brief       Returns the base domain's device back-pointer.
+         */
+        inline nccl_net_ofi_domain_t *get_domain()
+        {
+                return domain;
+        }
+
+        /**
+         * @brief       Increments the base domain reference count.
+         */
+        inline void increment_ref_cnt() {
+                ref_cnt++;
+        }
+
+        /**
+         * @brief       Decrements the base domain reference count.
+         */
+        inline void decrement_ref_cnt() {
+                ref_cnt--;
+        }
+
+        /**
+         * @brief       Release resources associated with the domain
+         * 
+         * @param       skip_device_lock
+         *              false, taking device lock by default.
+         *              ture, not taking device lock when caller takes it.
+         * @param       force_cleanup
+         *              false, not release when endpoint exists.
+         *              true, release no matter endpoint exists nor not.
+         */
+        int release_resource_domain(bool skip_device_lock, bool force_cleanup);
+
+        pthread_mutex_t res_domain_lock;
+
+        /*
+         * Boolean flag indicating whether the domain is still valid and usable
+         *
+         * When a communicator is closed with inflight requests, the domain is
+         * marked inactive, preventing further use of communicators on the
+         * domain. Transports should check the domain_active flag before using
+         * OFI resources associated with the domain (CQs, endpoints, AVs)
+         *
+         * This flag is protected by domain_lock
+         */
+        bool res_domain_active;
+
+        /**
+         * Invalidate domain. Marks the domain as inactive and removes it from the
+         * thread->domain map, so future communicators do not use this domain.
+         *
+         * Caller is assumed to hold domain_lock
+         */
+        virtual void invalidate();
+
+protected:
+        /**
+         * @brief       Destructor.
+         * 
+         * Cleans up base domain resources.
+         */
+        virtual ~nccl_net_ofi_resource_domain_t();
+
+        /**
+         * @brief       Cleanup domain resources.
+         * 
+         * Virtual function to clean up and release each transport type's domain resources.
+         * Set called_cleanup_resources to true at the start of the function to make sure
+         * it is only called once per domain instance.
+         * 
+         * @return      0 if successfully, negative error code on failure.
+         */
+        virtual int cleanup_resources() = 0;
+
+        /* Backpointer to the domain associated with this resource domain. */
+        nccl_net_ofi_domain_t *domain = nullptr;
+
+        /* Domain reference counter for resource management.
+         *
+         * In some modes (right now, endpoint_per_communicator), we create
+         * multiple endpoints per domain. This counter tracks the number
+         * of endpoints created on this domain. When it reaches 0, the
+         * domain can be destroyed. */
+        size_t ref_cnt;
+
+        /** 
+         * Track whether the cleanup_resources function was already called to avoid calling
+         * multiple time on the same domain instance. It being set to true does not 
+         * indicate that the domain resources were successfully released since this is set
+         * to true regardless of whether cleanup_resources finished successfully or not.
+         */
+        bool called_cleanup_resources = false;
+};
 
 /**
  * Endpoint - A per-Proxy Thread device abstraction
@@ -637,7 +836,7 @@ public:
 	 * Expectation is that this will be called by a transport's endpoint
 	 * constructor 
 	 */
-	nccl_net_ofi_ep_t(nccl_net_ofi_domain_t *domain);
+	nccl_net_ofi_ep_t(nccl_net_ofi_domain_t *domain, nccl_net_ofi_resource_domain_t *res_domain);
 
 	/* Create a receiving object and provide a handle to it.
 	 *
@@ -723,6 +922,9 @@ protected:
 
 	/* Backpointer to the domain associated with this ep. */
 	nccl_net_ofi_domain_t *domain = nullptr;
+
+        /* Backpointer to the resource domain associated with this ep. */
+        nccl_net_ofi_resource_domain_t *res_domain = nullptr;
 
 	/** 
 	 * Track whether the cleanup_resources function was already called to avoid calling
@@ -938,7 +1140,7 @@ public:
 	 * false: allocate domain per process
 	 * true: allocate domain per thread
 	 */
-	bool domain_per_thread;
+	bool res_domain_per_thread; //SN: revisit this, may not be required
 
 protected:
 	/* Array of devices */

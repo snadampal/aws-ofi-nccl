@@ -23,7 +23,7 @@
 #if HAVE_CUDA
 #include "nccl_ofi_cuda.h"
 #endif
-#include "nccl_ofi_sendrecv.h"
+//#include "nccl_ofi_sendrecv.h"
 #include "nccl_ofi_rdma.h"
 #include "nccl_ofi_topo.h"
 #include "nccl_ofi_math.h"
@@ -210,7 +210,7 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 		bool dummy;
 
 		if (ofi_nccl_protocol.get() == PROTOCOL::SENDRECV) {
-			ret = nccl_net_ofi_sendrecv_init(provider_filter, &plugin);
+			ret = -1; //nccl_net_ofi_sendrecv_init(provider_filter, &plugin);
 			if (ret != 0) {
 				NCCL_OFI_WARN("Failed to initialize sendrecv protocol");
 				goto exit;
@@ -243,8 +243,8 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 
 		if (!have_multiple_rails || rdma_plugin == NULL) {
 			try {
-				ret = nccl_net_ofi_sendrecv_init(provider_filter,
-								 &sendrecv_plugin);
+				ret = -1; //nccl_net_ofi_sendrecv_init(provider_filter,
+					//			 &sendrecv_plugin);
 			}
 			catch (const std::exception &e) {
 				NCCL_OFI_WARN("Caught exception in sendrecv_init: %s", e.what());
@@ -281,9 +281,9 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 			      ofi_nccl_protocol.get_string());
 	}
 
-	plugin->domain_per_thread = ofi_nccl_domain_per_thread.get();
+	plugin->res_domain_per_thread = ofi_nccl_domain_per_thread.get(); //SN: change the func name to reflect resource domain
 	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Creating one domain per %s",
-		      plugin->domain_per_thread ? "thread" : "process");
+		      plugin->res_domain_per_thread ? "thread" : "process");
 
 	ret = plugin->complete_init();
 	if (ret != 0) {
@@ -308,6 +308,7 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 	if (ep == nullptr) {
 		goto exit;
 	}
+
 	ret = device->get_properties(&properties);
 	if (ret != 0) {
 		goto exit;
@@ -316,6 +317,7 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 		      (properties.regIsGlobal == 0) ? "false" : "true");
 	NCCL_OFI_INFO(NCCL_NET | NCCL_INIT, "Support for DMA-BUF registrations: %s",
 		      (properties.dmabuf_support == 0) ? "false" : "true");
+
 	ret = ep->release_ep(false, false);
 	if (ret != 0) {
 		goto exit;
@@ -505,7 +507,7 @@ int nccl_net_ofi_plugin_t::nccl_net_ofi_info_properties(struct fi_info *nic_prov
 	 * Also, if we have different domains for different threads, registrations
 	 * are not reported as global even if they are tied to the domain.
 	 */
-	if (nic_prov->domain_attr->mr_mode & FI_MR_ENDPOINT || this->domain_per_thread) {
+	if (nic_prov->domain_attr->mr_mode & FI_MR_ENDPOINT || this->res_domain_per_thread) {
 		props->regIsGlobal = 0;
 		NCCL_OFI_TRACE(NCCL_INIT | NCCL_NET, "Global registrations are not supported");
 	} else {
@@ -718,7 +720,7 @@ nccl_net_ofi_domain_t *nccl_net_ofi_device_t::nccl_net_ofi_device_get_domain_imp
 
 	assert(this->plugin != nullptr);
 
-	if (this->plugin->domain_per_thread) {
+	if (this->plugin->res_domain_per_thread) {
 		lookup_key = nccl_net_ofi_gettid();
 	}
 
@@ -741,12 +743,11 @@ nccl_net_ofi_domain_t *nccl_net_ofi_device_t::nccl_net_ofi_device_get_domain_imp
 			       this->dev_id,
 			       this->name);
 	}
-
 	return domain;
 }
 
 
-nccl_net_ofi_domain_t *nccl_net_ofi_device_t::get_domain()
+nccl_net_ofi_domain_t *nccl_net_ofi_device_t::get_domain(int dom_id)
 {
 	nccl_net_ofi_domain_t *domain = nullptr;
 
@@ -757,7 +758,7 @@ nccl_net_ofi_domain_t *nccl_net_ofi_device_t::get_domain()
 }
 
 
-nccl_net_ofi_ep_t *nccl_net_ofi_device_t::get_ep()
+nccl_net_ofi_ep_t *nccl_net_ofi_device_t::get_ep(int dom_id)
 {
 	nccl_net_ofi_domain_t *domain = nullptr;
 	nccl_net_ofi_ep_t *ep = nullptr;
@@ -840,9 +841,9 @@ int nccl_net_ofi_device_t::release_all_domain_and_ep()
 		nccl_net_ofi_domain_t *domain = domain_iter->second;
 		/* For each domain, clean up its endpoints. */
 		nccl_net_ofi_mutex_lock(&domain->domain_lock);
-		if (domain->get_endpoint_ptr()) {
-			ep = domain->get_endpoint_ptr();
-			domain->clear_endpoint();
+		if (domain->get_base_endpoint_ptr()) {
+			ep = domain->get_base_endpoint_ptr();
+			domain->clear_base_endpoint();
 
 			ret = ep->release_ep(true, true);
 			if (ret != 0) {
@@ -896,7 +897,7 @@ nccl_net_ofi_ep_t *nccl_net_ofi_domain_t::get_ep()
 
 	pthread_wrapper scoped_domain_lock(&this->domain_lock);
 
-	ep = this->endpoint;
+	ep = this->base_endpoint;
 
 	if (ep == nullptr) {
 		ep = this->create_endpoint();
@@ -906,7 +907,7 @@ nccl_net_ofi_ep_t *nccl_net_ofi_domain_t::get_ep()
 			return nullptr;
 		}
 
-		this->endpoint = ep;
+		this->base_endpoint = ep;
 		this->increment_ref_cnt();
 
 		NCCL_OFI_TRACE(NCCL_NET, "Endpoint %p for domain %p is created",
@@ -914,6 +915,7 @@ nccl_net_ofi_ep_t *nccl_net_ofi_domain_t::get_ep()
 	}
 
 	ep->increment_ref_cnt();
+
 	return ep;
 }
 
@@ -933,6 +935,21 @@ void nccl_net_ofi_domain_t::invalidate()
 	}
 }
 
+
+void nccl_net_ofi_resource_domain_t::invalidate()
+{
+        if (this->res_domain_active == true) {
+                this->res_domain_active = false;
+
+                pthread_wrapper lock(&this->domain->domain_lock);
+
+                /* Remove this domain from the thread->domain table so that it
+                   is not used for future communicators */
+                this->domain->remove_resource_domain_from_map(this);
+
+                this->domain->inc_unreleased_inactive_resource_domain_counter();
+        }
+}
 
 int nccl_net_ofi_domain_t::release_domain(bool skip_device_lock, bool force_cleanup)
 {
@@ -1028,6 +1045,23 @@ nccl_net_ofi_domain_t::nccl_net_ofi_domain_t(nccl_net_ofi_device_t *device_arg)
 		/* Mark key pool as not in use */
 		this->mr_rkey_pool = new nccl_ofi_idpool_t(0);
 	}
+
+}
+
+nccl_net_ofi_resource_domain_t::nccl_net_ofi_resource_domain_t(nccl_net_ofi_domain_t *domain_arg)
+        : res_domain_active(true),
+          domain(domain_arg),
+          ref_cnt(0)
+{
+        int ret;
+
+        assert(this->domain != nullptr);
+
+        ret = nccl_net_ofi_mutex_init(&this->res_domain_lock, nullptr);
+        if (ret != 0) {
+                NCCL_OFI_WARN("Unable to initialize domain mutex");
+                throw std::runtime_error("base domain constructor: mutex init failed");
+        }
 }
 
 
@@ -1043,6 +1077,10 @@ nccl_net_ofi_domain_t::~nccl_net_ofi_domain_t()
 	}
 }
 
+
+nccl_net_ofi_resource_domain_t::~nccl_net_ofi_resource_domain_t()
+{
+}
 
 int nccl_net_ofi_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 {
@@ -1061,8 +1099,8 @@ int nccl_net_ofi_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 	if (local_ref_cnt == 0 || force_cleanup) {
 		/* If this was the endpoint we stored in domain for connection
 		   management, remove that reference as well */
-		if (domain_ptr->get_endpoint_ptr() == this) {
-			domain_ptr->clear_endpoint();
+		if (domain_ptr->get_base_endpoint_ptr() == this) {
+			domain_ptr->clear_base_endpoint();
 		}
 
 		if (force_cleanup && local_ref_cnt != 0) {
@@ -1090,11 +1128,13 @@ int nccl_net_ofi_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 }
 
 
-nccl_net_ofi_ep_t::nccl_net_ofi_ep_t(nccl_net_ofi_domain_t *domain_arg)
+nccl_net_ofi_ep_t::nccl_net_ofi_ep_t(nccl_net_ofi_domain_t *domain_arg, nccl_net_ofi_resource_domain_t *resource_arg)
 	: domain(domain_arg),
+	  res_domain(resource_arg),
 	  ref_cnt(0)
 {
 	assert(domain_arg != nullptr);
+        assert(resource_arg != nullptr);
 }
 
 
@@ -1123,4 +1163,68 @@ int nccl_net_ofi_configure_nccl_proto_simple(const char *log_reason)
 	env_manager::getInstance().insert_envvar("NCCL_PROTO", "simple", false);
 
 	return 0;
+}
+
+
+void nccl_net_ofi_domain_t::remove_resource_domain_from_map(nccl_net_ofi_resource_domain_t *res_domain)
+{
+        size_t n_removed = 0;
+
+        assert(!this->res_domain_table.empty());
+        for (auto it = this->res_domain_table.begin(); it != this->res_domain_table.end();) {
+                if (it->second == res_domain) {
+                        it = this->res_domain_table.erase(it);
+                        ++n_removed;
+                } else {
+                        ++it;
+                }
+        }
+
+        assert_always(n_removed == 1);
+}
+
+nccl_net_ofi_resource_domain_t *nccl_net_ofi_domain_t::nccl_net_ofi_domain_get_resource_domain_impl()
+{
+	nccl_net_ofi_resource_domain_t *res_domain = nullptr;
+        long lookup_key = 0;
+
+        assert(this->plugin != nullptr);
+
+        if (this->get_device()->plugin->res_domain_per_thread) {
+                lookup_key = nccl_net_ofi_gettid();
+        }
+
+        auto res_domain_iter = this->res_domain_table.find(lookup_key);
+
+        if (res_domain_iter != this->res_domain_table.end()) {
+                res_domain = res_domain_iter->second;
+        } else {
+                res_domain = this->create_resource_domain();
+                if (res_domain == nullptr) {
+                        NCCL_OFI_WARN("Initializing a new resource domain for device %s failed",
+                                      this->get_device()->name);
+                        return nullptr;
+                }
+
+                this->res_domain_table.insert(std::pair(lookup_key, res_domain));
+
+                NCCL_OFI_TRACE(NCCL_NET, "Resource Domain %p for device #%d (%s) is created",
+                               res_domain,
+                               this->get_device()->dev_id,
+                               this->get_device()->name);
+        }
+
+        return res_domain;
+}
+
+
+nccl_net_ofi_resource_domain_t *nccl_net_ofi_domain_t::get_resource_domain()
+{
+        nccl_net_ofi_resource_domain_t *res_domain = nullptr;
+
+        //pthread_wrapper scoped_domain_lock(&this->domain_lock);
+
+        res_domain = this->nccl_net_ofi_domain_get_resource_domain_impl();
+
+        return res_domain;
 }

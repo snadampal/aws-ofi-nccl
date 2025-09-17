@@ -239,10 +239,12 @@ typedef struct nccl_net_ofi_flush_data {
 
 class nccl_net_ofi_rdma_device_t;
 class nccl_net_ofi_rdma_domain_t;
+class nccl_net_ofi_rdma_resource_domain_t;
 class nccl_net_ofi_rdma_ep_t;
 
 struct nccl_net_ofi_rdma_device_rail_t;
 struct nccl_net_ofi_rdma_domain_rail_t;
+struct nccl_net_ofi_rdma_resource_domain_rail_t;
 
 struct nccl_net_ofi_rdma_req;
 struct nccl_net_ofi_ep_rail;
@@ -689,9 +691,14 @@ struct nccl_net_ofi_rdma_domain_rail_t {
 	/* Access domain handles */
 	struct fid_domain *domain;
 
-	struct fid_cq *cq;
 };
 
+
+struct nccl_net_ofi_rdma_resource_domain_rail_t {
+        uint16_t rail_id;
+
+        struct fid_cq *cq;
+};
 
 class nccl_net_ofi_rdma_domain_t : public nccl_net_ofi_domain_t {
 public:
@@ -702,7 +709,7 @@ public:
 	 * rails, message scheduler, endpoint address list, flush buffer, and 
 	 * connection manager.
 	 */	
-	nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_t *domain_args);
+	nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_t *device_args);
 	
 	inline struct fid_domain *get_ofi_domain_for_cm() override
 	{
@@ -710,11 +717,6 @@ public:
 		return domain_rails[0].domain;
 	}
 
-	inline struct fid_cq *get_ofi_cq_for_cm() override
-	{
-		assert(!domain_rails.empty());
-		return domain_rails[0].cq;
-	}
 
 	inline nccl_net_ofi_rdma_device_t *rdma_domain_get_device()
 	{
@@ -841,6 +843,9 @@ public:
 	 */
 	nccl_ofi_connection_manager *cm = nullptr;
 
+
+	 nccl_net_ofi_resource_domain_t *create_resource_domain() override;
+
 protected:
 	/**
 	 * @brief	RDMA domain destructor.
@@ -850,6 +855,7 @@ protected:
 	 * was called.
 	 */		
 	~nccl_net_ofi_rdma_domain_t() override;
+
 
 	int cleanup_resources() override;
 
@@ -900,6 +906,51 @@ private:
 	 *		non-zero on error
 	 */
 	int dereg_mr_on_device(nccl_net_ofi_rdma_mr_handle_t *mr_handle);
+};
+
+
+
+class nccl_net_ofi_rdma_resource_domain_t : public nccl_net_ofi_resource_domain_t {
+public:
+        /**
+         * @brief       Default constructor.
+         *
+         * Calls base domain class constructor, sets up RDMA domain resources like domain
+         * rails, message scheduler, endpoint address list, flush buffer, and
+         * connection manager.
+         */
+        nccl_net_ofi_rdma_resource_domain_t(nccl_net_ofi_rdma_domain_t *domain_args);
+
+        inline struct fid_cq *get_ofi_cq_for_cm() override
+        {
+                assert(!res_domain_rails.empty());
+                return res_domain_rails[0].cq;
+        }
+
+        inline nccl_net_ofi_rdma_resource_domain_rail_t *rdma_resource_domain_get_rail(uint16_t rail_id)
+        {
+                assert(!res_domain_rails.empty());
+                assert(rail_id < num_rails);
+                return &res_domain_rails[rail_id];
+        }
+
+        uint16_t num_rails;
+        std::vector<nccl_net_ofi_rdma_resource_domain_rail_t> res_domain_rails;
+
+        /* List of endpoints and set of addresses they have connections to */
+        nccl_ofi_ep_addr_list_t ep_addr_list; //SN: revisit this
+
+protected:
+        /**
+         * @brief       RDMA domain destructor.
+         * 
+         * Overrides base domain class virtual destructor, asserts that "cleanup_resources"
+         * had already been called to clean up RDMA domain resources before the destructor
+         * was called.
+         */
+        ~nccl_net_ofi_rdma_resource_domain_t() override;
+
+        int cleanup_resources() override;
 };
 
 
@@ -956,7 +1007,7 @@ public:
 	 * 
 	 * Calls base endpoint class constructor, sets up endpoint rails and freelists. 
 	 */
-	nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domain);
+	nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domain, nccl_net_ofi_rdma_resource_domain_t *resource);
 
 	/**
 	 * @brief	Destructor.
@@ -1000,6 +1051,11 @@ public:
 	{
 		return static_cast<nccl_net_ofi_rdma_domain_t *>(domain);
 	}
+
+        inline nccl_net_ofi_rdma_resource_domain_t *rdma_endpoint_get_resource_domain()
+        {
+                return static_cast<nccl_net_ofi_rdma_resource_domain_t *>(res_domain);
+        }
 
 	inline nccl_net_ofi_rdma_device_t *rdma_endpoint_get_device()
 	{
@@ -1182,7 +1238,7 @@ public:
 
 	/* true if the current endpoint is a endpoint_per_communicator
 	   receive communicator */
-	bool is_endpoint_per_communicator_ep;
+	bool is_endpoint_per_communicator_ep; //SN: revisit this, understand what it is for.
 
 protected:
 	/**
@@ -1197,7 +1253,8 @@ protected:
 	 * @brief	Initialize libfabric resources of endpoint rails
 	 */
 	int init_rail_ofi_resources(nccl_net_ofi_rdma_device_t *device,
-				    nccl_net_ofi_rdma_domain_t *domain);
+				    nccl_net_ofi_rdma_domain_t *domain,
+				    nccl_net_ofi_rdma_resource_domain_t *resource);
 
 	/**
 	 * @brief	Finalize rx buffer data of endpoint
@@ -1215,6 +1272,7 @@ protected:
 	static int ep_rail_init(int dev_id, uint16_t rail_id,
 				nccl_net_ofi_rdma_device_rail_t *dev_rail,
 				nccl_net_ofi_rdma_domain_rail_t *domain_rail,
+				nccl_net_ofi_rdma_resource_domain_rail_t *res_domain_rail,
 				nccl_net_ofi_ep_rail_t *ep_rail,
 				uint32_t tclass);
 
@@ -1385,7 +1443,7 @@ protected:
 
 	int cleanup_resources() override;
 
-	nccl_net_ofi_domain_t *create_domain() override;
+	nccl_net_ofi_domain_t *create_domain(int dom_id=0) override;
 
 	/**
 	 * @brief	Allocates and initializes various libfabric resources to make rdma

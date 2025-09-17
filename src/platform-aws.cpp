@@ -130,7 +130,7 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::RDMA,
-		.domain_per_thread = true,
+		.domain_per_thread = false,
 		.env = {
 			{ "NCCL_BUFFSIZE", "8388608" },
 			{ "NCCL_P2P_NET_CHUNKSIZE", "524288" },
@@ -153,7 +153,7 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 35.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::RDMA,
-		.domain_per_thread = true,
+		.domain_per_thread = false,
 		.env = {
 			{ "NCCL_BUFFSIZE", "8388608" },
 			{ "NCCL_P2P_NET_CHUNKSIZE", "524288" },

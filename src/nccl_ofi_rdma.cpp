@@ -1623,7 +1623,7 @@ static inline int rdma_process_error_entry(struct fi_cq_err_entry *err_entry, st
 }
 
 
-static int ofi_process_cq_rail(nccl_net_ofi_rdma_device_t *device, nccl_net_ofi_rdma_domain_rail_t *rail)
+static int ofi_process_cq_rail(nccl_net_ofi_rdma_device_t *device, nccl_net_ofi_rdma_resource_domain_rail_t *rail)
 {
 	struct fi_cq_data_entry cqe_buffers[cq_read_count];
 	ssize_t rc = 0;
@@ -1683,10 +1683,11 @@ int nccl_net_ofi_rdma_ep_t::ofi_process_cq()
 	int ret;
 
 	nccl_net_ofi_rdma_domain_t *domain_ptr = rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_resource_domain_t *res_ptr = rdma_endpoint_get_resource_domain();
 	nccl_net_ofi_rdma_device_t *device = domain_ptr->rdma_domain_get_device();
 
-	for (uint16_t rail_id = 0; rail_id != domain_ptr->num_rails; ++rail_id) {
-		nccl_net_ofi_rdma_domain_rail_t *rail = domain_ptr->rdma_domain_get_rail(rail_id);
+	for (uint16_t rail_id = 0; rail_id != res_ptr->num_rails; ++rail_id) {
+		nccl_net_ofi_rdma_resource_domain_rail_t *rail = res_ptr->rdma_resource_domain_get_rail(rail_id);
 
 		ret = ofi_process_cq_rail(device, rail);
 		if (ret != 0) {
@@ -2369,10 +2370,11 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)base_comm->ep;
 	assert(ep != NULL);
 
-	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	pthread_wrapper domain_lock(&domain->domain_lock);
+//	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
+	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "test");
+	CHECK_DOMAIN_ACTIVE(res_domain, "test");
 
 	/* If the current request is not complete and not errored out,
 	* check if it is a flush(only if cuda) and the corresponding read is complete
@@ -2695,11 +2697,13 @@ static int reg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
 {
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)send_comm->base.ep;
         nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
 	assert(domain != NULL);
+	assert(res_domain != NULL);
 
-	pthread_wrapper domain_lock(&domain->domain_lock);
+	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_send_comm");
+	CHECK_DOMAIN_ACTIVE(res_domain, "reg_mr_send_comm");
 
 	return domain->reg_mr(ckey,
 			      type,
@@ -2712,11 +2716,13 @@ static int reg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
 {
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)recv_comm->base.ep;
 	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
 	assert(domain != NULL);
+	assert(res_domain != NULL);
 
-	pthread_wrapper domain_lock(&domain->domain_lock);
+	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_recv_comm");
+	CHECK_DOMAIN_ACTIVE(res_domain, "reg_mr_recv_comm");
 
 	return domain->reg_mr(ckey,
 			      type,
@@ -3002,6 +3008,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	rdma_req_recv_data_t *recv_data = NULL;
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
 	nccl_net_ofi_rdma_domain_t *domain = NULL;
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = NULL;
 	nccl_net_ofi_rdma_device_t *device = NULL;
 	int dev_id = 0;
 	nccl_net_ofi_rdma_mr_handle_t **mr_handles = (nccl_net_ofi_rdma_mr_handle_t **)mhandles;
@@ -3044,9 +3051,11 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 	device = ep->rdma_endpoint_get_device();
 	assert(device != NULL);
 
-	pthread_wrapper domain_lock(&domain->domain_lock);
+	res_domain = ep->rdma_endpoint_get_resource_domain();
 
-	CHECK_DOMAIN_ACTIVE(domain, "recv");
+	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
+
+	CHECK_DOMAIN_ACTIVE(res_domain, "recv");
 
 
 	ret = ep->process_cq_if_pending();
@@ -3913,10 +3922,11 @@ static int flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	nccl_net_ofi_rdma_ep_t *ep = rdma_recv_comm_get_ep(r_comm);
 
-	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	pthread_wrapper domain_lock(&domain->domain_lock);
+	//nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
+	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "flush");
+	CHECK_DOMAIN_ACTIVE(res_domain, "flush");
 
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	ssize_t rc = 0;
@@ -4683,11 +4693,13 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 	/* Retrieve and validate device */
 	nccl_net_ofi_rdma_domain_t *domain = l_comm_ep->rdma_endpoint_get_domain();
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = l_comm_ep->rdma_endpoint_get_resource_domain();
 	assert(domain != NULL);
+	assert(res_domain != NULL);
 
-	pthread_wrapper lock(&domain->domain_lock);
+	pthread_wrapper lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "accept");
+	CHECK_DOMAIN_ACTIVE(res_domain, "accept");
 
 	/* Set return receive communicator to NULL until accept finalizes */
 	*recv_comm = NULL;
@@ -4701,7 +4713,6 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 	 */
 	switch (l_comm->stage) {
 	case COMM_CREATE_START:
-
 		l_comm->stage = COMM_CONN_REQ_PENDING;
 
 		fallthrough;
@@ -4829,6 +4840,7 @@ int nccl_net_ofi_rdma_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 	nccl_net_ofi_rdma_listen_comm_t *l_comm = nullptr;
 
 	nccl_net_ofi_rdma_domain_t *domain_ptr = this->rdma_endpoint_get_domain();
+        nccl_net_ofi_rdma_resource_domain_t *res_domain_ptr = this->rdma_endpoint_get_resource_domain();
 
 	/* Retrieve and validate device */
 	nccl_net_ofi_rdma_device_t *device = domain_ptr->rdma_domain_get_device();
@@ -4836,9 +4848,9 @@ int nccl_net_ofi_rdma_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 
 	int dev_id = device->dev_id;
 
-	pthread_wrapper lock(&domain_ptr->domain_lock);
+	pthread_wrapper lock(&res_domain_ptr->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain_ptr, "listen");
+	CHECK_DOMAIN_ACTIVE(res_domain_ptr, "listen");
 
 	ret = this->post_rx_buffs();
 	if (ret != 0) {
@@ -5467,6 +5479,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = (nccl_net_ofi_rdma_mr_handle_t *)mhandle;
 	nccl_net_ofi_rdma_ep_t *ep = NULL;
 	nccl_net_ofi_rdma_domain_t *domain = NULL;
+	nccl_net_ofi_rdma_resource_domain_t *res_domain = NULL;
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	uint16_t msg_seq_num = s_comm->next_msg_seq_num;
 	bool have_ctrl = false;
@@ -5493,10 +5506,12 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 
 	domain = ep->rdma_endpoint_get_domain();
 	assert(domain != NULL);
+        res_domain = ep->rdma_endpoint_get_resource_domain();
+	assert(res_domain != NULL);
 
-	pthread_wrapper domain_lock(&domain->domain_lock);
+	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain, "send");
+	CHECK_DOMAIN_ACTIVE(res_domain, "send");
 
 	ret = ep->process_cq_if_pending();
 	if (ret == -EAGAIN) {
@@ -6118,10 +6133,11 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 		reinterpret_cast<nccl_net_ofi_rdma_send_comm_t *>(comm_state->comm);
 
 	nccl_net_ofi_rdma_domain_t *domain_ptr = this->rdma_endpoint_get_domain();
+        nccl_net_ofi_rdma_resource_domain_t *res_domain_ptr = this->rdma_endpoint_get_resource_domain();
 
-	pthread_wrapper lock(&domain_ptr->domain_lock);
+	pthread_wrapper lock(&res_domain_ptr->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(domain_ptr, "connect");
+	CHECK_DOMAIN_ACTIVE(res_domain_ptr, "connect");
 
 	/* Connection establishment is not done yet */
 	if (comm_state->stage == COMM_CONNECTED) {
@@ -6265,6 +6281,7 @@ static inline int set_local_address(struct fid_ep *ep, nccl_net_ofi_ep_rail_t *r
 int nccl_net_ofi_rdma_ep_t::ep_rail_init(int dev_id, uint16_t rail_id,
 					 nccl_net_ofi_rdma_device_rail_t *dev_rail,
 					 nccl_net_ofi_rdma_domain_rail_t *domain_rail,
+					 nccl_net_ofi_rdma_resource_domain_rail_t *res_domain_rail,
 					 nccl_net_ofi_ep_rail_t *ep_rail,
 					 uint32_t tclass)
 {
@@ -6285,7 +6302,7 @@ int nccl_net_ofi_rdma_ep_t::ep_rail_init(int dev_id, uint16_t rail_id,
 						domain_rail->domain,
 						&ep_rail->ofi_ep,
 						&ep_rail->av,
-						domain_rail->cq);
+						res_domain_rail->cq);
 	if (tclass != FI_TC_UNSPEC) {
 		fi_freeinfo(rail_info);
 	}
@@ -6306,12 +6323,14 @@ int nccl_net_ofi_rdma_ep_t::ep_rail_init(int dev_id, uint16_t rail_id,
 
 
 int nccl_net_ofi_rdma_ep_t::init_rail_ofi_resources(nccl_net_ofi_rdma_device_t *device,
-						    nccl_net_ofi_rdma_domain_t *domain_arg)
+						    nccl_net_ofi_rdma_domain_t *domain_arg,
+						    nccl_net_ofi_rdma_resource_domain_t *res_domain_arg)
 {
 	int ret = 0;
 	int dev_id = device->dev_id;
 	nccl_net_ofi_rdma_device_rail_t *rail_dev;
 	nccl_net_ofi_rdma_domain_rail_t *domain_rail;
+	nccl_net_ofi_rdma_resource_domain_rail_t *res_domain_rail;
 	nccl_net_ofi_ep_rail_t *rail;
 	nccl_net_ofi_ep_rail_t *control_rail;
 	uint32_t tc = (ofi_nccl_use_low_lat_tc() == 0) ? FI_TC_UNSPEC : FI_TC_LOW_LATENCY;
@@ -6320,10 +6339,11 @@ int nccl_net_ofi_rdma_ep_t::init_rail_ofi_resources(nccl_net_ofi_rdma_device_t *
 	for (uint16_t rail_id = 0; rail_id != device->num_rails; ++rail_id) {
 		rail_dev = device->rdma_device_get_rail(rail_id);
 		domain_rail = domain_arg->rdma_domain_get_rail(rail_id);
+		res_domain_rail = res_domain_arg->rdma_resource_domain_get_rail(rail_id);
 		rail = this->rdma_endpoint_get_rail(rail_id);
 
 		ret = nccl_net_ofi_rdma_ep_t::ep_rail_init(dev_id, rail_id, rail_dev, 
-							   domain_rail, rail, FI_TC_UNSPEC);
+							   domain_rail, res_domain_rail,rail, FI_TC_UNSPEC);
 		if (ret != 0) {
 			NCCL_OFI_WARN("Initializing rail %d failed", rail_id);
 			goto exit;
@@ -6334,11 +6354,12 @@ int nccl_net_ofi_rdma_ep_t::init_rail_ofi_resources(nccl_net_ofi_rdma_device_t *
 	for (uint16_t rail_id = 0; rail_id != this->num_control_rails; ++rail_id) {
 		rail_dev = device->rdma_device_get_rail(rail_id);
 		domain_rail = domain_arg->rdma_domain_get_rail(rail_id);
+		res_domain_rail = res_domain_arg->rdma_resource_domain_get_rail(rail_id);
 		rail = rdma_endpoint_get_rail(rail_id);
 		control_rail = rdma_endpoint_get_control_rail(rail_id);
 
 		ret = nccl_net_ofi_rdma_ep_t::ep_rail_init(dev_id, rail_id, rail_dev,
-							   domain_rail, control_rail, tc);
+							   domain_rail, res_domain_rail, control_rail, tc);
 		if (ret != 0) {
 			NCCL_OFI_WARN("Initializing control rail %d failed", rail_id);
 			goto exit;
@@ -6482,7 +6503,9 @@ nccl_net_ofi_ep_t *nccl_net_ofi_rdma_domain_t::create_endpoint()
 	assert(device_ptr != nullptr);
 
 	/* Allocate endpoint */
-	auto *ep = new nccl_net_ofi_rdma_ep_t(this);
+	/* pick the resource domain for this thread */
+	auto *res_domain_ptr = reinterpret_cast<nccl_net_ofi_rdma_resource_domain_t *>(this->get_resource_domain());
+	auto *ep = new nccl_net_ofi_rdma_ep_t(this, res_domain_ptr);
 
 	NCCL_OFI_TRACE(NCCL_NET, "RDMA endpoint %p for dev #%d is created", ep, 
 		       device_ptr->dev_id);
@@ -6504,8 +6527,8 @@ nccl_net_ofi_ep_t *nccl_net_ofi_rdma_domain_t::create_endpoint()
 }
 
 
-nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domain_arg)
-	: nccl_net_ofi_ep_t(domain_arg)
+nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domain_arg, nccl_net_ofi_rdma_resource_domain_t *res_domain_arg)
+	: nccl_net_ofi_ep_t(domain_arg, res_domain_arg)
 {
 	int ret = 0;
 	nccl_net_ofi_rdma_device_t *device = domain_arg->rdma_domain_get_device();
@@ -6548,7 +6571,7 @@ nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domai
 
 	this->is_endpoint_per_communicator_ep = false;
 
-	ret = this->init_rail_ofi_resources(device, domain_arg);
+	ret = this->init_rail_ofi_resources(device, domain_arg, res_domain_arg);
 	if (ret != 0) {
 		throw std::runtime_error("rdma endpoint constructor: initializing rails failed");
 	}
@@ -6582,10 +6605,6 @@ int nccl_net_ofi_rdma_domain_t::cleanup_resources()
 	}
 
 	for (uint16_t i = 0 ; i < this->num_rails ; ++i) {
-		if (this->domain_rails[i].cq != nullptr) {
-			fi_close(&this->domain_rails[i].cq->fid);
-			this->domain_rails[i].cq = nullptr;
-		}
 		fi_close(&this->domain_rails[i].domain->fid);
 	}
 
@@ -6603,12 +6622,36 @@ int nccl_net_ofi_rdma_domain_t::cleanup_resources()
 	return ret;
 }
 
+int nccl_net_ofi_rdma_resource_domain_t::cleanup_resources()
+{
+        /* cleanup_resources should only be called once per domain instance */
+        assert(!this->called_cleanup_resources);
+        this->called_cleanup_resources = true;
+
+        for (uint16_t i = 0 ; i < this->num_rails ; ++i) {
+                if (this->res_domain_rails[i].cq != nullptr) {
+                        fi_close(&this->res_domain_rails[i].cq->fid);
+                        this->res_domain_rails[i].cq = nullptr;
+                }
+        }
+
+        return 0;
+}
+
 
 nccl_net_ofi_rdma_domain_t::~nccl_net_ofi_rdma_domain_t()
 {
 	/* cleanup_resources should always be called to clean-up domain resources before
 	   the destructor is called */
 	assert(this->called_cleanup_resources);
+}
+
+
+nccl_net_ofi_rdma_resource_domain_t::~nccl_net_ofi_rdma_resource_domain_t()
+{
+        /* cleanup_resources should always be called to clean-up domain resources before
+           the destructor is called */
+        assert(this->called_cleanup_resources);
 }
 
 
@@ -6638,20 +6681,11 @@ nccl_net_ofi_rdma_domain_t::nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_
 				      ret, fi_strerror(-ret));
 			throw std::runtime_error("RDMA domain constructor: fi_domain failed");
 		}
-
-		/* Create a shared completion queue for all Libfabric endpoints
-		   opened on this domain rail */
-		struct fi_cq_attr cq_attr = {};
-		cq_attr.format = FI_CQ_FORMAT_DATA;
-		cq_attr.size = ofi_nccl_cq_size();
-		ret = fi_cq_open(domain_rail->domain, &cq_attr, &domain_rail->cq, NULL);
-		if (OFI_UNLIKELY(ret != 0)) {
-			NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
-				      ret, fi_strerror(-ret));
-			throw std::runtime_error("RDMA domain constructor: fi_cq_open failed");
-		}
-		assert(domain_rail->cq != NULL);
 	}
+
+
+        this->base_res_domain = this->create_resource_domain();
+
 
 	/*
 	 * Setup flush resources.
@@ -6660,6 +6694,7 @@ nccl_net_ofi_rdma_domain_t::nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_
 	if (OFI_UNLIKELY(ret != 0)) {
 		throw std::runtime_error("RDMA domain constructor: flush buffer alloc/reg failed");
 	}
+
 
 	/* Create scheduler */
 	ret = nccl_net_ofi_threshold_scheduler_init(this->num_rails, &this->scheduler);
@@ -6673,14 +6708,60 @@ nccl_net_ofi_rdma_domain_t::nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_
 		(*this, sizeof(nccl_ofi_rdma_connection_info_t));
 }
 
-nccl_net_ofi_domain_t *nccl_net_ofi_rdma_device_t::create_domain()
-{
 
+nccl_net_ofi_rdma_resource_domain_t::nccl_net_ofi_rdma_resource_domain_t(nccl_net_ofi_rdma_domain_t *domain_arg)
+        : nccl_net_ofi_resource_domain_t(domain_arg)
+{
+        int ret = 0;
+        if (OFI_UNLIKELY(domain_arg == nullptr)) {
+                NCCL_OFI_WARN("Invalid domain provided");
+                throw std::runtime_error("RDMA resource domain constructor: invalid device provided");
+        }
+
+	nccl_net_ofi_rdma_device_t *device_ptr = reinterpret_cast<nccl_net_ofi_rdma_device_t*>(domain_arg->get_device());
+
+        this->num_rails = device_ptr->num_rails;
+
+        this->res_domain_rails = std::vector<nccl_net_ofi_rdma_resource_domain_rail_t>(this->num_rails,
+                                                                          nccl_net_ofi_rdma_resource_domain_rail_t{});
+
+        for (uint16_t i = 0; i < this->num_rails ; i++) {
+		nccl_net_ofi_rdma_domain_rail_t *domain_rail = domain_arg->rdma_domain_get_rail(i);
+                nccl_net_ofi_rdma_resource_domain_rail_t *res_domain_rail = this->rdma_resource_domain_get_rail(i);
+
+                res_domain_rail->rail_id = i;
+
+                /* Create a shared completion queue for all Libfabric endpoints
+                   opened on this resource domain rail */
+                struct fi_cq_attr cq_attr = {};
+                cq_attr.format = FI_CQ_FORMAT_DATA;
+                cq_attr.size = ofi_nccl_cq_size();
+                ret = fi_cq_open(domain_rail->domain, &cq_attr, &res_domain_rail->cq, NULL);
+                if (OFI_UNLIKELY(ret != 0)) {
+                        NCCL_OFI_WARN("Couldn't open CQ. RC: %d, ERROR: %s",
+                                      ret, fi_strerror(-ret));
+                        throw std::runtime_error("RDMA resource domain constructor: fi_cq_open failed");
+                }
+                assert(res_domain_rail->cq != NULL);
+        }
+}
+
+
+nccl_net_ofi_domain_t *nccl_net_ofi_rdma_device_t::create_domain(int dom_id)
+{
+	//TODO: Implement multi domain per device support
 	auto *domain = new nccl_net_ofi_rdma_domain_t(this);
 
 	return domain;
 }
 
+
+nccl_net_ofi_resource_domain_t *nccl_net_ofi_rdma_domain_t::create_resource_domain()
+{       
+        auto *res_domain = new nccl_net_ofi_rdma_resource_domain_t(this);
+        
+        return res_domain;
+}
 
 int nccl_net_ofi_rdma_device_t::init_device_rail_ofi_resources(nccl_net_ofi_rdma_device_rail_t *rail_dev)
 {
@@ -6981,7 +7062,7 @@ int nccl_net_ofi_rdma_plugin_t::complete_init()
 	nccl_ofi_topo_data_iterator_t data_iter;
 	int ret;
 
-	if (this->domain_per_thread && ofi_nccl_endpoint_per_communicator() != 0) {
+	if (this->res_domain_per_thread && ofi_nccl_endpoint_per_communicator() != 0) {
 		/* TODO support this configuration */
 		NCCL_OFI_WARN("domain_per_thread is true and ofi_nccl_endpoint_per_communicator() != 0 are not supported together");
 		return ncclInvalidArgument;
@@ -7072,6 +7153,7 @@ nccl_net_ofi_rdma_plugin_t::nccl_net_ofi_rdma_plugin_t(struct fi_info *provider_
 	   such as these there. */
 	s_comm_cleanup_list = new std::deque<nccl_net_ofi_rdma_send_comm_t*>;
 	r_comm_cleanup_list = new std::deque<nccl_net_ofi_rdma_recv_comm_t*>;
+
 }
 
 

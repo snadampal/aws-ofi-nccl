@@ -11,7 +11,7 @@ endpoint::endpoint(nccl_net_ofi_domain_t &domain) :
 	mr_key_pool(*(domain.mr_rkey_pool))
 {
 	fi_info *info = domain.get_device()->get_ofi_info_for_cm();
-	fid_cq *cq = domain.get_ofi_cq_for_cm();
+	fid_cq *cq = domain.get_resource_domain()->get_ofi_cq_for_cm();
 	int ret = nccl_ofi_ofiutils_init_connection(info, ofi_domain, &this->ofi_ep, &this->av, cq);
 	if (ret != 0) {
 		/* We can't return an error. If not caught, this is going to propagate up and

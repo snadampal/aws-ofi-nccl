@@ -18,7 +18,6 @@ sources = \
 	nccl_ofi_assert.cpp \
 	nccl_ofi_compat.cpp \
 	nccl_ofi_net.cpp \
-	nccl_ofi_sendrecv.cpp \
 	nccl_ofi_system.cpp \
 	nccl_ofi_rdma.cpp \
 	nccl_ofi_scheduler.cpp \
