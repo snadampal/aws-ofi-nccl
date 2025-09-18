@@ -1238,7 +1238,8 @@ public:
 
 	/* true if the current endpoint is a endpoint_per_communicator
 	   receive communicator */
-	bool is_endpoint_per_communicator_ep; //SN: revisit this, understand what it is for.
+	bool is_endpoint_per_send_communicator_ep;
+	bool is_endpoint_per_recv_communicator_ep;
 
 protected:
 	/**

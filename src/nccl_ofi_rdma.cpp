@@ -3210,6 +3210,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 int nccl_net_ofi_rdma_domain_t::dealloc_and_dereg_flush_buff()
 {
 	int ret = 0;
+
 	nccl_net_ofi_rdma_mr_handle_t *mr_handle = this->flush_buff.mr_handle;
 	if (mr_handle) {
 		ret = this->dereg_mr(mr_handle);
@@ -4350,7 +4351,7 @@ static nccl_net_ofi_rdma_recv_comm_t *prepare_recv_comm(nccl_net_ofi_rdma_domain
 				goto error;
 			}
 
-			new_ep_rdma_cast->is_endpoint_per_communicator_ep = true;
+			new_ep_rdma_cast->is_endpoint_per_recv_communicator_ep = true;
 
 			/**
 			 * Since we bypassed domain->get_ep, increment domain
@@ -6029,6 +6030,11 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 	}
 
         if (ofi_nccl_endpoint_per_communicator() != 0) {
+		//TODO: check if the nccl_ofi_ep_addr list can be used for caching the ep for the
+		//same addr and reuse it. But the challenge is, how to know the
+		//current ep address without actually creating it first
+		//not possible to get it based on the remote ep becasue, the remote ep
+		//is available only after the connection is established.
 		nccl_net_ofi_ep_t *new_ep;
  		new_ep = domain->create_endpoint();
 		if (new_ep == nullptr) {
@@ -6042,7 +6048,7 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
                     goto error;
                 }
 
-                new_ep_rdma_cast->is_endpoint_per_communicator_ep = true;
+                new_ep_rdma_cast->is_endpoint_per_send_communicator_ep = true;
 
                 /**
                  * Since we bypassed domain->get_ep, increment domain
@@ -6447,7 +6453,7 @@ int nccl_net_ofi_rdma_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 	 * different release mechanism depending on the endpoint
 	 * type.  Otherwise, we use the base code release function.
 	 */
-	if (this->is_endpoint_per_communicator_ep) {
+	if (this->is_endpoint_per_send_communicator_ep || this->is_endpoint_per_recv_communicator_ep) {
 		nccl_net_ofi_rdma_domain_t *domain_ptr = nullptr;
 
 		domain_ptr = this->rdma_endpoint_get_domain();
@@ -6470,10 +6476,13 @@ int nccl_net_ofi_rdma_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 				NCCL_OFI_INFO(NCCL_NET, "Endpoint %p still have ref count %d when released",
 					      this, local_ref_cnt);
 			}
-			ret = domain_ptr->ep_addr_list.remove(this);
-			if (ret != 0) {
-				NCCL_OFI_WARN("delete ep for addr failed: %d", ret);
-				goto unlock;
+
+			if (this->is_endpoint_per_recv_communicator_ep) {
+				ret = domain_ptr->ep_addr_list.remove(this);
+				if (ret != 0) {
+					NCCL_OFI_WARN("delete ep for addr failed: %d", ret);
+					goto unlock;
+				}
 			}
 			ret = this->cleanup_resources();
 			delete this;
@@ -6600,7 +6609,8 @@ nccl_net_ofi_rdma_ep_t::nccl_net_ofi_rdma_ep_t(nccl_net_ofi_rdma_domain_t *domai
 	this->eager_rx_buff_size = (this->eager_send_size == 0) ?
 		EAGER_RX_BUFFER_ALIGNMENT : this->eager_send_size;
 
-	this->is_endpoint_per_communicator_ep = false;
+	this->is_endpoint_per_send_communicator_ep = false;
+	this->is_endpoint_per_recv_communicator_ep = false;
 
 	ret = this->init_rail_ofi_resources(device, domain_arg, res_domain_arg);
 	if (ret != 0) {
