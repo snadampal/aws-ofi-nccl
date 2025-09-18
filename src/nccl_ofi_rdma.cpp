@@ -6028,8 +6028,41 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 		return -ENOMEM;
 	}
 
+        if (ofi_nccl_endpoint_per_communicator() != 0) {
+		nccl_net_ofi_ep_t *new_ep;
+ 		new_ep = domain->create_endpoint();
+		if (new_ep == nullptr) {
+         		NCCL_OFI_WARN("Failed to allocate new ep");
+                        goto error;
+                }
+
+                nccl_net_ofi_rdma_ep_t *new_ep_rdma_cast = static_cast<nccl_net_ofi_rdma_ep_t *>(new_ep);
+                ret = new_ep_rdma_cast->post_rx_buffs();
+                if (ret != 0) {
+                    goto error;
+                }
+
+                new_ep_rdma_cast->is_endpoint_per_communicator_ep = true;
+
+                /**
+                 * Since we bypassed domain->get_ep, increment domain
+                 * refcnt.
+                 *
+                 * The caller should already own the domain lock.
+                 */
+                domain->increment_ref_cnt();
+                ret_s_comm->base.base.ep = new_ep;
+        } else {
+                /* Use the domain base ep */
+           	ret_s_comm->base.base.ep = this;
+		ret = this->post_rx_buffs();
+                if (ret != 0) {
+                    goto error;
+                }
+
+	}
+
 	ret_s_comm->base.base.type = NCCL_NET_OFI_SEND_COMM;
-	ret_s_comm->base.base.ep = this;
 	ret_s_comm->base.base.dev_id = dev_id;
 	ret_s_comm->base.regMr = reg_mr_send_comm;
 	ret_s_comm->base.deregMr = dereg_mr_send_comm;
@@ -6054,7 +6087,7 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 	   get_ep(). Increase the refcnt so the endpoint is not freed when the
 	   API releases it.
 	   Caller assumed to own domain lock. */
-	this->increment_ref_cnt();
+	ret_s_comm->base.base.ep->increment_ref_cnt();
 
 	/* Allocate send communicator ID */
 	comm_id = device->comm_idpool.allocate_id();
@@ -6111,7 +6144,7 @@ int nccl_net_ofi_rdma_ep_t::create_send_comm(nccl_net_ofi_rdma_send_comm_t **s_c
 			device->comm_idpool.free_id(ret_s_comm->local_comm_id);
 		}
 
-		this->decrement_ref_cnt();
+		ret_s_comm->base.base.ep->decrement_ref_cnt();
 		free_rdma_send_comm(ret_s_comm);
 	}
 
@@ -6146,12 +6179,7 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 		return -EINVAL;
 	}
 
-	ret = this->post_rx_buffs();
-	if (ret != 0) {
-		NCCL_OFI_WARN("Error posting rx buffers: %d", ret);
-		return ret;
-	}
-
+ 	nccl_net_ofi_rdma_ep_t *s_comm_ep = NULL;
 	/*
 	 * Create the communicator if it has not yet been created.
 	 */
@@ -6167,14 +6195,17 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 
 		nccl_ofi_rdma_connection_info_t conn_msg;
 
-		this->prepare_send_connect_message(s_comm->local_comm_id, s_comm->ctrl_mailbox, s_comm->ctrl_mr_handle, &conn_msg);
-
+		s_comm_ep = static_cast<nccl_net_ofi_rdma_ep_t *>(s_comm->base.base.ep);
+		s_comm_ep->prepare_send_connect_message(s_comm->local_comm_id, s_comm->ctrl_mailbox, s_comm->ctrl_mr_handle, &conn_msg);
+		
 		/* Create connector */
 		s_comm->connector = domain_ptr->cm->connect(*handle, &conn_msg, sizeof(conn_msg));
-	}
+	} else {
+		s_comm_ep = static_cast<nccl_net_ofi_rdma_ep_t *>(s_comm->base.base.ep);
+	}	
 
 	/* Progress our engine to get completions */
-	ret = this->ofi_process_cq();
+	ret = s_comm_ep->ofi_process_cq();
 	if (OFI_UNLIKELY(ret != 0)) {
 		goto error;
 	}
@@ -6448,7 +6479,7 @@ int nccl_net_ofi_rdma_ep_t::release_ep(bool skip_lock, bool force_cleanup)
 			delete this;
 		}
 
- unlock:
+unlock:
 		if (!skip_lock) {
 			nccl_net_ofi_mutex_unlock(&domain_ptr->domain_lock);
 		}
@@ -7025,14 +7056,14 @@ static void get_hints(struct fi_info *hints)
 	hints->domain_attr->mr_mode = FI_MR_LOCAL | FI_MR_HMEM | FI_MR_VIRT_ADDR |
 		FI_MR_ALLOCATED | FI_MR_PROV_KEY;
 	hints->domain_attr->mr_key_size = (size_t) ofi_nccl_mr_key_size();
-	hints->domain_attr->threading = FI_THREAD_SAFE;
+	hints->domain_attr->threading = FI_THREAD_COMPLETION;
 
 	/* We hard poll for completion, but if a provider is faster with async
 	 * progress, then we don't really care and should let it do that. At
 	 * least one provider has an issue with progress manual and internal
 	 * acks during shutdown, so allow users to override requested model. */
-	hints->domain_attr->control_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
-	hints->domain_attr->data_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
+	hints->domain_attr->control_progress = FI_PROGRESS_CONTROL_UNIFIED; //nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
+	//hints->domain_attr->data_progress = nccl_ofi_translate_progress_enum(ofi_nccl_progress_model.get());
 }
 
 
