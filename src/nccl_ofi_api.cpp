@@ -249,8 +249,13 @@ ncclResult_t nccl_net_ofi_listen_v2(int dev, void* handle, void** listenComm)
 	return ret;
 }
 
-
 ncclResult_t nccl_net_ofi_listen_v5(int dev_id, void *handle, void **lComm)
+{
+	/* use the default access and resource domains */
+	return nccl_net_ofi_listen_v11(dev_id, handle, lComm, 0, 0);
+}
+
+ncclResult_t nccl_net_ofi_listen_v11(int dev_id, void *handle, void **lComm, unsigned int domain_key, unsigned int resource_key)
 {
 	int ret = 0;
 	nccl_net_ofi_device_t *device = nullptr;
@@ -276,7 +281,7 @@ ncclResult_t nccl_net_ofi_listen_v5(int dev_id, void *handle, void **lComm)
 		}
 
 		/* Retrieve and validate endpoint */
-		ep = device->get_ep();
+		ep = device->get_ep(domain_key);
 		if (OFI_UNLIKELY(ep == nullptr)) {
 			NCCL_OFI_WARN("Error accessing endpoint. Endpoint has not been initialized.");
 			return check_return(ncclInternalError);
@@ -324,6 +329,12 @@ ncclResult_t nccl_net_ofi_connect_v5(int dev_id, void *handle, void **sComm)
 }
 
 
+ncclResult_t nccl_net_ofi_connect_v10(int dev_id, void *handle, void **sComm, int trafficClass)
+{
+    /* use the default access and resource domains */
+    return nccl_net_ofi_connect_v11(dev_id, handle, sComm, trafficClass, 0, 0);
+}
+
 /*
  * @brief	Non-blocking connect which returns sComm as nullptr
  *		with an expectation that it will be called again until 
@@ -348,7 +359,7 @@ ncclResult_t nccl_net_ofi_connect_v5(int dev_id, void *handle, void **sComm)
  * @return	0, on success
  * 		error, on others
  */
-ncclResult_t nccl_net_ofi_connect_v10(int dev_id, void *handle, void **sComm, int trafficClass)
+ncclResult_t nccl_net_ofi_connect_v11(int dev_id, void *handle, void **sComm, int trafficClass, unsigned int domain_key, unsigned int resource_key)
 {
 	/* Validate plugin */
 	if (OFI_UNLIKELY(plugin == nullptr)) {
@@ -376,7 +387,7 @@ ncclResult_t nccl_net_ofi_connect_v10(int dev_id, void *handle, void **sComm, in
 				return check_return(ncclInternalError);
 			}
 
-			ep = device->get_ep();
+			ep = device->get_ep(domain_key);
 			if (OFI_UNLIKELY(ep == nullptr)) {
 				return check_return(ncclInternalError);
 			}

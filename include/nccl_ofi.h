@@ -340,7 +340,7 @@ public:
 	 * the device->get_ep call, hold the lock while we're also creating
 	 * the ep.
 	 */
-	nccl_net_ofi_domain_t *nccl_net_ofi_device_get_domain_impl();
+	nccl_net_ofi_domain_t *nccl_net_ofi_device_get_domain_impl(int dom_id = 0);
 
 	/**
 	 * @brief	Erase all domain_table elements matching the provided domain

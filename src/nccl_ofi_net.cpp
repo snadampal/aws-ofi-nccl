@@ -304,7 +304,7 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 	 */
 	device = plugin->get_device(0);
 
-	ep = device->get_ep();
+	ep = device->get_ep(0);
 	if (ep == nullptr) {
 		goto exit;
 	}
@@ -713,18 +713,13 @@ void nccl_net_ofi_device_t::remove_domain_from_map(nccl_net_ofi_domain_t *domain
 }
 
 
-nccl_net_ofi_domain_t *nccl_net_ofi_device_t::nccl_net_ofi_device_get_domain_impl()
+nccl_net_ofi_domain_t *nccl_net_ofi_device_t::nccl_net_ofi_device_get_domain_impl(int dom_id)
 {
 	nccl_net_ofi_domain_t *domain = nullptr;
-	long lookup_key = 0;
 
 	assert(this->plugin != nullptr);
 
-	if (this->plugin->res_domain_per_thread) {
-		lookup_key = nccl_net_ofi_gettid();
-	}
-
-	auto domain_iter = this->domain_table.find(lookup_key);
+	auto domain_iter = this->domain_table.find(dom_id);
 
 	if (domain_iter != this->domain_table.end()) {
 		domain = domain_iter->second;
@@ -736,7 +731,7 @@ nccl_net_ofi_domain_t *nccl_net_ofi_device_t::nccl_net_ofi_device_get_domain_imp
 			return nullptr;
 		}
 
-		this->domain_table.insert(std::pair(lookup_key, domain));
+		this->domain_table.insert(std::pair(dom_id, domain));
 
 		NCCL_OFI_TRACE(NCCL_NET, "Domain %p for device #%d (%s) is created",
 			       domain,
@@ -752,7 +747,7 @@ nccl_net_ofi_domain_t *nccl_net_ofi_device_t::get_domain(int dom_id)
 	nccl_net_ofi_domain_t *domain = nullptr;
 
 	pthread_wrapper scoped_device_lock(&this->device_lock);
-	domain = this->nccl_net_ofi_device_get_domain_impl();
+	domain = this->nccl_net_ofi_device_get_domain_impl(dom_id);
 
 	return domain;
 }
@@ -765,7 +760,7 @@ nccl_net_ofi_ep_t *nccl_net_ofi_device_t::get_ep(int dom_id)
 
 	pthread_wrapper scoped_device_lock(&this->device_lock);
 
-	domain = this->nccl_net_ofi_device_get_domain_impl();
+	domain = this->nccl_net_ofi_device_get_domain_impl(dom_id);
 	if (domain == nullptr) {
 		return nullptr;
 	}
