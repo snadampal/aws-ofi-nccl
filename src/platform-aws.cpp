@@ -80,7 +80,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {
 			{ "NCCL_BUFFSIZE", "8388608" },
 			{ "NCCL_P2P_NET_CHUNKSIZE", "524288" },
@@ -94,7 +93,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {
 			{ "NCCL_BUFFSIZE", "8388608" },
 			{ "NCCL_P2P_NET_CHUNKSIZE", "524288" },
@@ -108,7 +106,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 150.0,
 		.gdr_required = false,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {},
 	},
 	{
@@ -119,7 +116,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = false,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {},
 	},
 	{
@@ -130,7 +126,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::RDMA,
-		.domain_per_thread = false,
 		.env = {
 			{ "NCCL_BUFFSIZE", "8388608" },
 			{ "NCCL_P2P_NET_CHUNKSIZE", "524288" },
@@ -153,7 +148,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 35.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::RDMA,
-		.domain_per_thread = false,
 		.env = {
 			{ "NCCL_BUFFSIZE", "8388608" },
 			{ "NCCL_P2P_NET_CHUNKSIZE", "524288" },
@@ -170,7 +164,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = false,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {},
 	},
 	{
@@ -181,7 +174,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {},
 	},
 	{
@@ -192,7 +184,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::RDMA,
-		.domain_per_thread = true,
 		.env = {},
 	},
 	{
@@ -203,7 +194,6 @@ static struct ec2_platform_data platform_data_map[] = {
 		.latency = 75.0,
 		.gdr_required = true,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = true,
 		.env = {},
 	},
 };
@@ -683,10 +673,6 @@ int platform_init(const char **provider_filter)
 
 	if (select_efa && ofi_nccl_protocol.get_source() == ParamSource::DEFAULT && platform_data) {
 		ofi_nccl_protocol.set(platform_data->default_protocol);
-	}
-
-	if (ofi_nccl_domain_per_thread.get_source() == ParamSource::DEFAULT && platform_data) {
-		ofi_nccl_domain_per_thread.set(platform_data->domain_per_thread);
 	}
 
 exit:

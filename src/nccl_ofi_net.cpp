@@ -281,9 +281,7 @@ int nccl_net_ofi_create_plugin(nccl_net_ofi_plugin_t **plugin_p)
 			      ofi_nccl_protocol.get_string());
 	}
 
-	plugin->res_domain_per_thread = ofi_nccl_domain_per_thread.get(); //SN: change the func name to reflect resource domain
-	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Creating one domain per %s",
-		      plugin->res_domain_per_thread ? "thread" : "process");
+	NCCL_OFI_INFO(NCCL_INIT | NCCL_NET, "Creating one resource domain per thread");
 
 	ret = plugin->complete_init();
 	if (ret != 0) {
@@ -507,7 +505,7 @@ int nccl_net_ofi_plugin_t::nccl_net_ofi_info_properties(struct fi_info *nic_prov
 	 * Also, if we have different domains for different threads, registrations
 	 * are not reported as global even if they are tied to the domain.
 	 */
-	if (nic_prov->domain_attr->mr_mode & FI_MR_ENDPOINT || this->res_domain_per_thread) {
+	if (nic_prov->domain_attr->mr_mode & FI_MR_ENDPOINT) {
 		props->regIsGlobal = 0;
 		NCCL_OFI_TRACE(NCCL_INIT | NCCL_NET, "Global registrations are not supported");
 	} else {
@@ -1185,9 +1183,7 @@ nccl_net_ofi_resource_domain_t *nccl_net_ofi_domain_t::nccl_net_ofi_domain_get_r
 
         assert(this->plugin != nullptr);
 
-        if (this->get_device()->plugin->res_domain_per_thread) {
-                lookup_key = nccl_net_ofi_gettid();
-        }
+        lookup_key = nccl_net_ofi_gettid();
 
         auto res_domain_iter = this->res_domain_table.find(lookup_key);
 

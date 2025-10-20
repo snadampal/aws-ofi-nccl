@@ -81,7 +81,6 @@ static struct ec2_platform_data test_map_1[] = {
 		.latency = 0.0,
 		.gdr_required = false,
 		.default_protocol = PROTOCOL::SENDRECV,
-		.domain_per_thread = 0,
 		.env = {},
 	},
 	{
@@ -92,7 +91,6 @@ static struct ec2_platform_data test_map_1[] = {
 		.latency = 0.0,
 		.gdr_required = false,
 		.default_protocol = PROTOCOL::RDMA,
-		.domain_per_thread = 0,
 		.env = {},
 	},
 };

@@ -1134,14 +1134,6 @@ public:
 					 int num_devices,
 					 nccl_ofi_properties_t *props);
 
-	/*
-	 * Determine whether to allocate the domain per process or per
-	 * thread.
-	 * false: allocate domain per process
-	 * true: allocate domain per thread
-	 */
-	bool res_domain_per_thread; //SN: revisit this, may not be required
-
 protected:
 	/* Array of devices */
 	std::vector<nccl_net_ofi_device_t *> p_devs;
