@@ -4877,7 +4877,7 @@ int nccl_net_ofi_rdma_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 	l_comm->base.close = listen_close;
 
 	/* Create CM listener */
-	l_comm->listener = domain_ptr->cm->listen();
+	l_comm->listener = res_domain_ptr->cm->listen();
 
 	*handle = l_comm->listener->get_handle();
 
@@ -6171,7 +6171,6 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 	nccl_net_ofi_rdma_send_comm_t *s_comm =
 		reinterpret_cast<nccl_net_ofi_rdma_send_comm_t *>(comm_state->comm);
 
-	nccl_net_ofi_rdma_domain_t *domain_ptr = this->rdma_endpoint_get_domain();
         nccl_net_ofi_rdma_resource_domain_t *res_domain_ptr = this->rdma_endpoint_get_resource_domain();
 
 	pthread_wrapper lock(&res_domain_ptr->res_domain_lock);
@@ -6205,7 +6204,7 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 		s_comm_ep->prepare_send_connect_message(s_comm->local_comm_id, s_comm->ctrl_mailbox, s_comm->ctrl_mr_handle, &conn_msg);
 		
 		/* Create connector */
-		s_comm->connector = domain_ptr->cm->connect(*handle, &conn_msg, sizeof(conn_msg));
+		s_comm->connector = res_domain_ptr->cm->connect(*handle, &conn_msg, sizeof(conn_msg));
 	} else {
 		s_comm_ep = static_cast<nccl_net_ofi_rdma_ep_t *>(s_comm->base.base.ep);
 	}	
@@ -6634,11 +6633,6 @@ int nccl_net_ofi_rdma_domain_t::cleanup_resources()
 	assert(!this->called_cleanup_resources);
 	this->called_cleanup_resources = true;
 
-	if (this->cm) {
-		delete this->cm;
-		this->cm = nullptr;
-	}
-
 	err_code = this->dealloc_and_dereg_flush_buff();
 	if (err_code != 0) {
 		NCCL_OFI_WARN("Failed to deregister flush buffer pool");
@@ -6668,6 +6662,11 @@ int nccl_net_ofi_rdma_resource_domain_t::cleanup_resources()
         /* cleanup_resources should only be called once per domain instance */
         assert(!this->called_cleanup_resources);
         this->called_cleanup_resources = true;
+
+        if (this->cm) {
+              delete this->cm;
+              this->cm = nullptr;
+        }
 
         for (uint16_t i = 0 ; i < this->num_rails ; ++i) {
                 if (this->res_domain_rails[i].cq != nullptr) {
@@ -6743,10 +6742,6 @@ nccl_net_ofi_rdma_domain_t::nccl_net_ofi_rdma_domain_t(nccl_net_ofi_rdma_device_
 		throw std::runtime_error("RDMA domain constructor: scheduler init failed");
 	}
 	assert(this->scheduler);
-
-	/* Connection manager for this domain */
-	this->cm = new nccl_ofi_connection_manager
-		(*this, sizeof(nccl_ofi_rdma_connection_info_t));
 }
 
 
@@ -6785,12 +6780,15 @@ nccl_net_ofi_rdma_resource_domain_t::nccl_net_ofi_rdma_resource_domain_t(nccl_ne
                 }
                 assert(res_domain_rail->cq != NULL);
         }
+
+	/* Connection manager for this domain */
+	this->cm = new nccl_ofi_connection_manager
+		(*this, sizeof(nccl_ofi_rdma_connection_info_t));
 }
 
 
 nccl_net_ofi_domain_t *nccl_net_ofi_rdma_device_t::create_domain(int dom_id)
 {
-	//TODO: Implement multi domain per device support
 	auto *domain = new nccl_net_ofi_rdma_domain_t(this);
 
 	return domain;
@@ -7102,12 +7100,6 @@ int nccl_net_ofi_rdma_plugin_t::complete_init()
 {
 	nccl_ofi_topo_data_iterator_t data_iter;
 	int ret;
-
-	if (this->res_domain_per_thread && ofi_nccl_endpoint_per_communicator() != 0) {
-		/* TODO support this configuration */
-		NCCL_OFI_WARN("domain_per_thread is true and ofi_nccl_endpoint_per_communicator() != 0 are not supported together");
-		return ncclInvalidArgument;
-	}
 
 	if (this->topo->max_group_size > 1) {
 		ret = write_topo_file(this->topo);

@@ -6,12 +6,12 @@
 using namespace nccl_ofi_cm;
 
 
-endpoint::endpoint(nccl_net_ofi_domain_t &domain) :
-	ofi_domain(domain.get_ofi_domain_for_cm()),
-	mr_key_pool(*(domain.mr_rkey_pool))
+endpoint::endpoint(nccl_net_ofi_resource_domain_t &domain) :
+	ofi_domain(domain.get_domain()->get_ofi_domain_for_cm()),
+	mr_key_pool(*(domain.get_domain()->mr_rkey_pool))
 {
-	fi_info *info = domain.get_device()->get_ofi_info_for_cm();
-	fid_cq *cq = domain.get_resource_domain()->get_ofi_cq_for_cm();
+	fi_info *info = domain.get_domain()->get_device()->get_ofi_info_for_cm();
+	fid_cq *cq = domain.get_ofi_cq_for_cm();
 	int ret = nccl_ofi_ofiutils_init_connection(info, ofi_domain, &this->ofi_ep, &this->av, cq);
 	if (ret != 0) {
 		/* We can't return an error. If not caught, this is going to propagate up and
@@ -117,7 +117,7 @@ int pending_requests_queue::process_pending_reqs()
 }
 
 
-cm_resources::cm_resources(nccl_net_ofi_domain_t &domain, size_t _conn_msg_data_size) :
+cm_resources::cm_resources(nccl_net_ofi_resource_domain_t &domain, size_t _conn_msg_data_size) :
 	ep(domain),
 	conn_msg_data_size(_conn_msg_data_size),
 	buff_mgr(ep, get_conn_msg_size()),

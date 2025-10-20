@@ -830,21 +830,7 @@ public:
 	/* Message scheduler */
 	nccl_net_ofi_scheduler_t *scheduler = nullptr;
 
-	/** 
-	 * Associated connection manager
-	 * 
-	 * TODO: make cm a direct member once nccl_ofi_connection_manager can
-	 * safely be initialized in the domain constructor. Currently cm can't
-	 * be initialized in the domain constructor initializer list since it
-	 * expects the domain passed in as an argument to have already 
-	 * initialized Libfabric and ID pool resources. As well, cm can't be 
-	 * initialized at the end of the domain constructor since
-	 * nccl_ofi_connection_manager doesn't have a default constructor.
-	 */
-	nccl_ofi_connection_manager *cm = nullptr;
-
-
-	 nccl_net_ofi_resource_domain_t *create_resource_domain() override;
+	nccl_net_ofi_resource_domain_t *create_resource_domain() override;
 
 protected:
 	/**
@@ -939,6 +925,19 @@ public:
 
         /* List of endpoints and set of addresses they have connections to */
         nccl_ofi_ep_addr_list_t ep_addr_list; //SN: revisit this
+
+	/**
+	 * Associated connection manager
+	 *
+	 * TODO: make cm a direct member once nccl_ofi_connection_manager can
+	 * safely be initialized in the domain constructor. Currently cm can't
+	 * be initialized in the domain constructor initializer list since it
+	 * expects the domain passed in as an argument to have already
+	 * initialized Libfabric and ID pool resources. As well, cm can't be
+	 * initialized at the end of the domain constructor since
+	 * nccl_ofi_connection_manager doesn't have a default constructor.
+	 */
+	nccl_ofi_connection_manager *cm = nullptr;
 
 protected:
         /**

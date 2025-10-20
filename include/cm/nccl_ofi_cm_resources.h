@@ -40,7 +40,7 @@ public:
 	 * @param domain:
 	 *      OFI domain against which to construct this ep
 	 */
-	endpoint(nccl_net_ofi_domain_t &domain);
+	endpoint(nccl_net_ofi_resource_domain_t &domain);
 
 	/**
 	 * Destructor. Closes OFI endpoint if not already closed, as well as
@@ -215,7 +215,7 @@ public:
 	 *      size of transport-specific part of connect and connect response
 	 *      messages
 	 */
-	cm_resources(nccl_net_ofi_domain_t &domain, size_t conn_msg_data_size);
+	cm_resources(nccl_net_ofi_resource_domain_t &domain, size_t conn_msg_data_size);
 
 	~cm_resources();
 
