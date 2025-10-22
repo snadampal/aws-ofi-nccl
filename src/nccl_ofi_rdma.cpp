@@ -2370,11 +2370,10 @@ static int test(nccl_net_ofi_req_t *base_req, int *done, int *size)
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)base_comm->ep;
 	assert(ep != NULL);
 
-//	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
 	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "test");
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain, "test");
 
 	/* If the current request is not complete and not errored out,
 	* check if it is a flush(only if cuda) and the corresponding read is complete
@@ -2697,13 +2696,11 @@ static int reg_mr_send_comm(nccl_net_ofi_send_comm_t *send_comm,
 {
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)send_comm->base.ep;
         nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
 	assert(domain != NULL);
-	assert(res_domain != NULL);
 
-	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
+	pthread_wrapper domain_lock(&domain->domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "reg_mr_send_comm");
+	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_send_comm");
 
 	return domain->reg_mr(ckey,
 			      type,
@@ -2716,13 +2713,11 @@ static int reg_mr_recv_comm(nccl_net_ofi_recv_comm_t *recv_comm,
 {
 	nccl_net_ofi_rdma_ep_t *ep = (nccl_net_ofi_rdma_ep_t *)recv_comm->base.ep;
 	nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
-	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
 	assert(domain != NULL);
-	assert(res_domain != NULL);
 
-	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
+	pthread_wrapper domain_lock(&domain->domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "reg_mr_recv_comm");
+	CHECK_DOMAIN_ACTIVE(domain, "reg_mr_recv_comm");
 
 	return domain->reg_mr(ckey,
 			      type,
@@ -3055,8 +3050,7 @@ static int recv(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 
 	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "recv");
-
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain, "recv");
 
 	ret = ep->process_cq_if_pending();
 	if (ret == -EAGAIN) {
@@ -3923,11 +3917,10 @@ static int flush(nccl_net_ofi_recv_comm_t *recv_comm, int n, void **buffers,
 		(nccl_net_ofi_rdma_recv_comm_t *)recv_comm;
 	nccl_net_ofi_rdma_ep_t *ep = rdma_recv_comm_get_ep(r_comm);
 
-	//nccl_net_ofi_rdma_domain_t *domain = ep->rdma_endpoint_get_domain();
 	nccl_net_ofi_rdma_resource_domain_t *res_domain = ep->rdma_endpoint_get_resource_domain();
 	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "flush");
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain, "flush");
 
 	nccl_net_ofi_rdma_req_t *req = NULL;
 	ssize_t rc = 0;
@@ -4700,7 +4693,7 @@ static int accept(nccl_net_ofi_listen_comm_t *listen_comm,
 
 	pthread_wrapper lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "accept");
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain, "accept");
 
 	/* Set return receive communicator to NULL until accept finalizes */
 	*recv_comm = NULL;
@@ -4851,7 +4844,7 @@ int nccl_net_ofi_rdma_ep_t::listen(nccl_net_ofi_conn_handle_t *handle,
 
 	pthread_wrapper lock(&res_domain_ptr->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain_ptr, "listen");
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain_ptr, "listen");
 
 	ret = this->post_rx_buffs();
 	if (ret != 0) {
@@ -5512,7 +5505,7 @@ static int send(nccl_net_ofi_send_comm_t *send_comm, void *data, size_t size, in
 
 	pthread_wrapper domain_lock(&res_domain->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain, "send");
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain, "send");
 
 	ret = ep->process_cq_if_pending();
 	if (ret == -EAGAIN) {
@@ -6175,7 +6168,7 @@ int nccl_net_ofi_rdma_ep_t::connect(nccl_net_ofi_conn_handle_t *handle,
 
 	pthread_wrapper lock(&res_domain_ptr->res_domain_lock);
 
-	CHECK_DOMAIN_ACTIVE(res_domain_ptr, "connect");
+	CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain_ptr, "connect");
 
 	/* Connection establishment is not done yet */
 	if (comm_state->stage == COMM_CONNECTED) {

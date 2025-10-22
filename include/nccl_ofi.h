@@ -79,11 +79,18 @@
  *
  * Caller is assumed to hold the domain lock
  */
-#define CHECK_DOMAIN_ACTIVE(res_domain, fn_name) \
+#define CHECK_RESOURCE_DOMAIN_ACTIVE(res_domain, fn_name) \
 	if (OFI_UNLIKELY(!res_domain->res_domain_active)) { \
 		NCCL_OFI_WARN("Called " fn_name " on request with inactive domain"); \
 		return -EINVAL; \
 	} \
+
+#define CHECK_DOMAIN_ACTIVE(domain, fn_name) \
+        if (OFI_UNLIKELY(!domain->domain_active)) { \
+                NCCL_OFI_WARN("Called " fn_name " on request with inactive domain"); \
+                return -EINVAL; \
+        } \
+
 
 /* Indicates if GPUDirect is supported by libfabric provider */
 enum gdr_support_level_t {GDR_UNKNOWN, GDR_SUPPORTED, GDR_UNSUPPORTED};
